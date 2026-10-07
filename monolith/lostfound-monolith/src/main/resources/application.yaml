@@ -1,0 +1,13 @@
+# 端口配置
+server:
+  port: 8080
+
+# actuator开放健康端点
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: always
