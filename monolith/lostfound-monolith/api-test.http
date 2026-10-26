@@ -1,0 +1,28 @@
+### 1. 成功创建失物 (正常)
+POST http://localhost:8080/api/lost-items
+Content-Type: application/json
+
+{
+  "userId": 1,
+  "itemName": "水杯",
+  "feature": "底部有贴纸"
+}
+
+### 2. 触发规则报错 (特征为空)
+POST http://localhost:8080/api/lost-items
+Content-Type: application/json
+
+{
+  "userId": 1,
+  "itemName": "笔袋",
+  "feature": ""
+}
+
+### 3. 查询全部失物
+GET http://localhost:8080/api/lost-items
+
+### 4. 根据ID查询 (假设上面创建成功获取了ID为1)
+GET http://localhost:8080/api/lost-items/1
+### GET request to example server
+
+

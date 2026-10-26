@@ -1,13 +1,20 @@
-# 端口配置
 server:
   port: 8080
 
-# actuator开放健康端点
-management:
-  endpoints:
-    web:
-      exposure:
-        include: health
-  endpoint:
-    health:
-      show-details: always
+spring:
+  application:
+    name: lostfound-monolith
+
+  datasource:
+    url: jdbc:mysql://localhost:3306/lostfound_db?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&createDatabaseIfNotExist=true
+    username: root
+    password: Lei040925%
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update # 自动建表
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true

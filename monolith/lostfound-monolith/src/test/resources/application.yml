@@ -1,0 +1,13 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;MODE=MySQL
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    # 等 Hibernate 按实体建完表（ddl-auto=create-drop）后再执行 data.sql，
+    # 否则 data.sql 会先于建表运行，报 Table "USERS" not found
+    defer-datasource-initialization: true
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: true

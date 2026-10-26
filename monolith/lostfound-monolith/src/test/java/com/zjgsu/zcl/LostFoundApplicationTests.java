@@ -1,10 +1,10 @@
-package com.campus.lostfound;
+package com.zjgsu.zcl;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 
 @SpringBootTest
-class LostfoundMonolithApplicationTests {
+class LostFoundApplicationTests {
     @Test
     void contextLoads() {
     }

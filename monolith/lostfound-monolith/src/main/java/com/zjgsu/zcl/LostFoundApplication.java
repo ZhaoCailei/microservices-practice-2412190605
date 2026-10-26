@@ -1,11 +1,13 @@
-package com.campus.lostfound;
+package com.zjgsu.zcl;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication
-public class LostfoundMonolithApplication {
+public class LostFoundApplication {
+
     public static void main(String[] args) {
-        SpringApplication.run(LostfoundMonolithApplication.class, args);
+        SpringApplication.run(LostFoundApplication.class, args);
     }
+
 }
