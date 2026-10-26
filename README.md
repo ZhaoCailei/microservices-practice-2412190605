@@ -125,3 +125,15 @@ mvn spring-boot:run
 
 物品图片上传、认领申请、管理员审核、用户登录鉴权、数据库持久化存储。
 
+## 第四周
+
+### 1. 数据库配置
+本地需安装 MySQL 8.0+。在 `application.yml` 中配置用户名和密码，项目启动时会自动创建 `lostfound_db` 数据库及表结构。
+
+### 2. cURL 测试示例
+**创建失物（正常）：**
+```bash
+curl -X POST http://localhost:8080/api/lost-items \
+-H "Content-Type: application/json" \
+-d '{"userId": 1, "itemName": "水杯", "feature": "底部有贴纸"}'
+```
