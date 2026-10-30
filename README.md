@@ -128,12 +128,26 @@ mvn spring-boot:run
 ## 第四周
 
 ### 1. 数据库配置
-本地需安装 MySQL 8.0+。在 `application.yml` 中配置用户名和密码，项目启动时会自动创建 `lostfound_db` 数据库及表结构。
+### 本地 MySQL 配置说明
+本项目未使用 Docker Compose，需本地安装 MySQL 8.0+ 版本。
+1. 确保本地 MySQL 服务已启动。
+2. 在 `application.yml` 中配置正确的用户名和密码。
+3. 项目配置了 `createDatabaseIfNotExist=true`，启动时会自动创建 `lostfound_db` 数据库并自动建表，无需手动执行建表 SQL。
 
 ### 2. cURL 测试示例
 **创建失物（正常）：**
+
 ```bash
 curl -X POST http://localhost:8080/api/lost-items \
 -H "Content-Type: application/json" \
 -d '{"userId": 1, "itemName": "水杯", "feature": "底部有贴纸"}'
 ```
+
+# 第五周：Docker 部署说明
+
+### 1. 环境变量准备
+复制根目录下的环境变量模板并修改密码：
+```bash
+cp .env.example .env
+```
+

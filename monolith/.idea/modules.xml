@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/monolith.iml" filepath="$PROJECT_DIR$/.idea/monolith.iml" />
+      <module fileurl="file://$PROJECT_DIR$/lostfound-monolith/lostfound-monolith.iml" filepath="$PROJECT_DIR$/lostfound-monolith/lostfound-monolith.iml" />
     </modules>
   </component>
 </project>

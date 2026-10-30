@@ -1,0 +1,12 @@
+### 1. 创建失物（验证写入）
+POST http://localhost:8080/api/lost-items
+Content-Type: application/json
+
+{
+  "userId": 1,
+  "itemName": "Docker测试水杯",
+  "feature": "蓝色杯身"
+}
+
+### 2. 查询失物（验证读取）
+GET http://localhost:8080/api/lost-items

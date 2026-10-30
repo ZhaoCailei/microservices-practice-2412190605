@@ -9,6 +9,7 @@
 验证方法：使用 Postman 发送 POST 请求，特征为空时成功返回 400 及错误提示。
 
 ## 3. 数据库持久化
+
 完成结果：使用 Spring Data JPA 连接 MySQL，配置了 `ddl-auto: update` 自动建表。
 验证方法：通过 GET 接口成功查询到 MySQL 中持久化的数据。
 

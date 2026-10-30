@@ -1,0 +1,45 @@
+services:
+  # MySQL 数据库服务
+  db:
+    image: mysql:8.4.11  # 按照作业要求修改了版本
+    container_name: lostfound-db
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+    ports:
+      - "3306:3306"
+    volumes:
+      - db-data:/var/lib/mysql # 命名数据卷
+    networks:
+      - lostfound-network
+    # 新增：健康检查配置
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Spring Boot 应用服务
+  app:
+    build:
+      context: ./monolith # 构建上下文
+    container_name: lostfound-app
+    ports:
+      - "8080:8080"
+    environment:
+      # 通过服务名 db 连接数据库
+      SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/${MYSQL_DATABASE}?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    depends_on:
+      db:
+        condition: service_healthy # 让应用等待数据库健康后启动
+    networks:
+      - lostfound-network
+
+networks:
+  lostfound-network:
+    driver: bridge
+
+volumes:
+  db-data:
