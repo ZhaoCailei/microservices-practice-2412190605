@@ -35,3 +35,20 @@ cd services/user-service
 ```bash
 docker compose up -d --build
 ```
+
+## 验证
+
+### 验证脚本
+提供了 `scripts/smoke-test.sh` 脚本，通过调用各服务的 `/actuator/health` 接口检查可用性。
+运行命令：`bash scripts/smoke-test.sh`
+运行结果：
+![冒烟测试](./screenshots/smoke-test.png)
+
+### 跨服务业务流程验证
+1. **成功流程**：发送 POST 请求到 `lost-service` (`userId: 1`)，`lost-service` 通过 `RestTemplate` 成功调用 `user-service` 校验用户，随后数据成功写入 `lost_db`，返回状态码 `200`。
+2. **失败流程**：发送 POST 请求 (`userId: 999`)，`user-service` 返回 404，`lost-service` 捕获异常并中断后续操作，返回状态码 `400`，且数据库未写入任何脏数据。
+
+### “远端成功、本地失败”窗口说明
+在当前的跨服务调用流程中（校验用户 -> 写入本地库），存在微服务架构中典型的**“远端成功、本地失败”窗口**：
+当 `lost-service` 调用 `user-service` 校验成功（远端成功）后，如果此时 `lost-service` 的本地数据库突然宕机或发生异常导致写入失败（本地失败），就会出现数据不一致的情况。
+**当前处理**：本周实现了基本失败处理（依赖不可用直接拦截）。对于上述极端窗口，由于未引入跨服务原子事务或自动补偿机制，无法直接回滚已完成的远程校验，只能向客户端抛出本地写入异常（HTTP 500）。后续可通过引入 MQ 或 SAGA 分布式事务来解决。
