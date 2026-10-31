@@ -1,45 +1,102 @@
 services:
-  # MySQL 数据库服务
-  db:
-    image: mysql:8.4.11  # 按照作业要求修改了版本
-    container_name: lostfound-db
+  # =========== 数据库 ===========
+  user-db:
+    image: mysql:8.4.11
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
-    ports:
-      - "3306:3306"
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123456}
+      MYSQL_DATABASE: user_db
     volumes:
-      - db-data:/var/lib/mysql # 命名数据卷
+      - user-db-data:/var/lib/mysql
     networks:
-      - lostfound-network
-    # 新增：健康检查配置
+      - micro-net
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-root123456}"]
       interval: 5s
       timeout: 5s
       retries: 5
 
-  # Spring Boot 应用服务
-  app:
-    build:
-      context: ./monolith # 构建上下文
-    container_name: lostfound-app
-    ports:
-      - "8080:8080"
+  lost-db:
+    image: mysql:8.4.11
     environment:
-      # 通过服务名 db 连接数据库
-      SPRING_DATASOURCE_URL: jdbc:mysql://db:3306/${MYSQL_DATABASE}?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai
-      SPRING_DATASOURCE_USERNAME: root
-      SPRING_DATASOURCE_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-    depends_on:
-      db:
-        condition: service_healthy # 让应用等待数据库健康后启动
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123456}
+      MYSQL_DATABASE: lost_db
+    volumes:
+      - lost-db-data:/var/lib/mysql
     networks:
-      - lostfound-network
+      - micro-net
+    healthcheck: # <--- 加上下面这 5 行
+      test: [ "CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-root123456}" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  admin-db:
+    image: mysql:8.4.11
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123456}
+      MYSQL_DATABASE: admin_db
+    volumes:
+      - admin-db-data:/var/lib/mysql
+    networks:
+      - micro-net
+    healthcheck: # <--- 加上这部分
+      test: [ "CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-root123456}" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # =========== 微服务 ===========
+  user-service:
+    build:
+      context: ./services/user-service
+    ports:
+      - "8081:8081" # 宿主 8081 -> 容器 8081（要与 application.yml 的 server.port 一致）
+    environment:
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123456}
+      DB_HOST: user-db
+    depends_on:
+      user-db:
+        condition: service_healthy
+    networks:
+      - micro-net
+
+  lost-service:
+    build:
+      context: ./services/lost-service
+    ports:
+      - "8082:8082" # 宿主 8082 -> 容器 8082（要与 application.yml 的 server.port 一致）
+    environment:
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123456}
+      DB_HOST: lost-db
+      # 容器内访问 user-service 要用服务名，不能用 localhost
+      USER_SERVICE_URL: http://user-service:8081/api/users
+    depends_on:
+      lost-db:
+        condition: service_healthy
+      user-service:
+        condition: service_started
+    networks:
+      - micro-net
+
+  admin-service:
+    build:
+      context: ./services/admin-service
+    ports:
+      - "8083:8083" # 宿主 8083 -> 容器 8083（要与 application.yml 的 server.port 一致）
+    environment:
+      SPRING_DATASOURCE_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123456}
+      DB_HOST: admin-db
+    depends_on:
+      admin-db:
+        condition: service_healthy
+    networks:
+      - micro-net
 
 networks:
-  lostfound-network:
+  micro-net:
     driver: bridge
 
 volumes:
-  db-data:
+  user-db-data:
+  lost-db-data:
+  admin-db-data:

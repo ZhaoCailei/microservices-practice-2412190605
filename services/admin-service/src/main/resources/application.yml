@@ -5,9 +5,11 @@ spring:
   application:
     name: admin-service
   datasource:
-    url: jdbc:mysql://localhost:3306/admin_db?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&createDatabaseIfNotExist=true
+    # 本机跑用 localhost；docker compose 里通过 DB_HOST=admin-db 覆盖
+    url: jdbc:mysql://${DB_HOST:localhost}:3306/admin_db?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&createDatabaseIfNotExist=true
     username: root
-    password: Lei040925%
+    # % 是特殊字符，统一加引号；容器里由 SPRING_DATASOURCE_PASSWORD 覆盖
+    password: "${SPRING_DATASOURCE_PASSWORD:Lei040925%}"
     driver-class-name: com.mysql.cj.jdbc.Driver
   jpa:
     hibernate:

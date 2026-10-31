@@ -5,10 +5,11 @@ spring:
   application:
     name: user-service
   datasource:
-    url: jdbc:mysql://localhost:3306/user_db?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&createDatabaseIfNotExist=true
+    # 本机跑用 localhost；docker compose 里通过 DB_HOST=user-db 覆盖
+    url: jdbc:mysql://${DB_HOST:localhost}:3306/user_db?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&createDatabaseIfNotExist=true
     username: root
-    # 确保这里是你真实的本地 MySQL 密码；% 属于特殊字符，统一加引号
-    password: "Lei040925%"
+    # % 是特殊字符，统一加引号；容器里由 SPRING_DATASOURCE_PASSWORD 覆盖
+    password: "${SPRING_DATASOURCE_PASSWORD:Lei040925%}"
     driver-class-name: com.mysql.cj.jdbc.Driver
   jpa:
     defer-datasource-initialization: true
