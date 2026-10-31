@@ -1,0 +1,22 @@
+server:
+  port: 8082
+
+spring:
+  application:
+    name: lost-service
+  datasource:
+    url: jdbc:mysql://localhost:3306/lost_db?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&createDatabaseIfNotExist=true
+    username: root
+    # 密码里有 % 等特殊字符时一定要加引号，否则 YAML 可能解析失败
+    # 注意：必须和 user-service 里用的是同一个 root 密码（Lei040925%），少一个字母就会 1045 Access denied
+    password: "Lei040925%"
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    defer-datasource-initialization: true
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+
+# 依赖的 user-service 地址：换端口或以后进 Docker 只改这里，不用改 Java 代码
+user-service:
+  url: http://localhost:8081

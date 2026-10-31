@@ -1,0 +1,27 @@
+### 1. 测试跨服务调用（成功）
+POST http://localhost:8082/api/lost-items
+Content-Type: application/json
+
+{
+  "itemName": "微服务测试雨伞",
+  "feature": "黑色长柄",
+  "userId": 1
+}
+
+### 2. 测试跨服务调用（失败拦截）
+POST http://localhost:8082/api/lost-items
+Content-Type: application/json
+
+{
+  "itemName": "测试拦截",
+  "feature": "红颜色",
+  "userId": 999
+}
+### 测试管理服务：审核通过失物
+POST http://localhost:8083/api/admin/audits
+Content-Type: application/json
+
+{
+  "lostItemId": 1,
+  "status": "APPROVED"
+}

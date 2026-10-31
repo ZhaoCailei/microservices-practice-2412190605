@@ -1,3 +1,5 @@
+
+
 # 校园失物招领系统
 
 ```
@@ -143,11 +145,18 @@ curl -X POST http://localhost:8080/api/lost-items \
 -d '{"userId": 1, "itemName": "水杯", "feature": "底部有贴纸"}'
 ```
 
-# 第五周：Docker 部署说明
+#    第五周：Docker 部署说明
 
 ### 1. 环境变量准备
 复制根目录下的环境变量模板并修改密码：
+
 ```bash
 cp .env.example .env
 ```
 
+2.健康接口检查
+
+```
+bash
+curl http://localhost:8080/actuator/health
+```
