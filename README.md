@@ -160,3 +160,15 @@ cp .env.example .env
 bash
 curl http://localhost:8080/actuator/health
 ```
+
+# 第六周：微服务测试命令说明
+
+由于项目已拆分为多个独立的微服务模块，运行测试需要分别进入对应的服务目录执行。
+
+### 1. 用户服务 (user-service) 测试
+进入 `services/user-service` 目录后执行：
+```bash
+cd services/user-service
+./mvnw test
+```
+
