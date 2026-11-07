@@ -326,9 +326,36 @@ docker exec -e MYSQL_PWD=<本地 .env 中的 MYSQL_ROOT_PASSWORD> \
 | 下线后失败（503） | ![下线失败](./screenshots/flow-503.png) |
 | 恢复后成功（200） | ![恢复成功](./screenshots/flow-recovered.png) |
 
-## 10. 测试与冒烟脚本
+## 10. 冒烟脚本与单元测试
 
-### 单元测试（不依赖真实 MySQL / Nacos）
+### 10.1 冒烟脚本 `scripts/smoke-test.sh`（在仓库根目录执行）
+
+```bash
+bash scripts/smoke-test.sh
+```
+
+检查项（共 **4 项**，**任一失败即以非零状态退出**，不会忽略错误后仍报成功）：
+
+| # | 检查项 | 通过条件 |
+| --- | --- | --- |
+| 1 | Nacos 控制台页面可访问 | `http://localhost:18080`（容器 8080 → 宿主 18080，**不是旧版 `8848/nacos`**）返回控制台 HTML 页面；脚本会跟随 3.x 控制台 `/` → `/next/` 的 302 跳转，并校验响应是含 `<title>` 的控制台页面 |
+| 2 | `user-service` 健康接口 | `http://localhost:8081/actuator/health` 响应含 `"status":"UP"` |
+| 3 | `lost-service` 健康接口 | `http://localhost:8082/actuator/health` 同上 |
+| 4 | `admin-service` 健康接口 | `http://localhost:8083/actuator/health` 同上 |
+
+实测退出码（4 种场景都验证过）：
+
+| 场景 | 关键输出 | 退出码 |
+| --- | --- | --- |
+| 全部正常 | `冒烟测试通过：4 项检查全部正常` | **0** |
+| 控制台地址错误（`NACOS_CONSOLE_URL=http://localhost:18999`） | `[FAIL] Nacos 控制台不可访问…` | **1** |
+| 误用旧版 `8848/nacos` 地址 | `[FAIL] …或不是控制台页面` | **1** |
+| 停掉 `admin-service` 后运行 | `[FAIL] admin-service (8083) 健康接口不可用或状态非 UP` | **1** |
+| `admin-service` 恢复后重跑 | `冒烟测试通过：4 项检查全部正常` | **0** |
+
+脚本不输出任何密码或 Token；控制台可打开 ≠ 业务调用成功，业务请求结果见 §7、§9。
+
+### 10.2 单元测试（不依赖真实 MySQL / Nacos）
 
 ```bash
 cd services/user-service && ./mvnw test
@@ -336,23 +363,45 @@ cd services/lost-service && ./mvnw test
 cd services/admin-service && ./mvnw test
 ```
 
-测试类中关闭了 Nacos 注册与发现、用 H2 内存库替代 MySQL。实测（在既无 MySQL、也无法解析 `nacos` 的隔离容器中执行）：
+> Windows PowerShell 下需写成 `cd services/user-service` 后执行 `.\mvnw.cmd test`（PowerShell 不接受无扩展名的 `./mvnw`；`scripts/` 目录下也没有 wrapper）。
+
+测试类中**关闭了 Nacos 发现与自动注册**（`spring.cloud.nacos.discovery.enabled=false`、`register-enabled=false`、`service-registry.auto-registration.enabled=false`），用 **H2 内存库**替代 MySQL，下游 HTTP 由 **`MockRestServiceServer`** 模拟。实测（在既无 MySQL、也无法解析 `nacos` 的隔离容器中执行）：
 
 | 服务 | 结果 |
 | --- | --- |
 | user-service | Tests run: 1, Failures: 0, Errors: 0 → BUILD SUCCESS |
-| lost-service | Tests run: 5, Failures: 0, Errors: 0 → BUILD SUCCESS（含 4 个服务发现用例） |
+| lost-service | Tests run: 5, Failures: 0, Errors: 0 → BUILD SUCCESS（`UserClientTest` 4 个 + 上下文 1 个） |
 | admin-service | Tests run: 1, Failures: 0, Errors: 0 → BUILD SUCCESS |
-
-### 冒烟脚本（失败返回非零）
-
-```bash
-bash scripts/smoke-test.sh
-```
-
-覆盖三个服务的 `/actuator/health`；三个正常时退出码 0，任一不可用时退出码 1（均已实测）。
 
 ## 11. 本周未做
 
 *   只取实例列表中的第一个实例，未实现轮询、权重路由、自动重试与熔断（按本周要求）。
 *   未引入 Nacos Config Starter（按本周要求）。
+*   未实现“健康状态与注册联动”，因此 Actuator 的健康结果不会影响 Nacos 实例状态（见 §8）。
+
+## 12. 整体验证结论
+
+环境：Docker Compose 单机部署，Nacos `nacos/nacos-server:v3.2.4`（standalone + 鉴权 + 数据卷），Spring Boot 4.1.2 / Spring Cloud 2025.1.4 / Spring Cloud Alibaba 2025.1.0.0。
+
+| 小题 | 结论 | 证据 |
+| --- | --- | --- |
+| ① 部署 Nacos 并注册服务 | 通过。Nacos 控制台在 `http://localhost:18080`，服务端 8848、SDK gRPC 9848 仅绑定本机；三个服务在 `public` 命名空间、`ZCL_GROUP` 分组注册，实例数均为 1，健康 | §1–§6、`nacos-list.png`、`nacos-user/lost/admin.png` |
+| ② 服务发现与业务调用 | 通过。`lost-service` 每次请求用 `DiscoveryClient` 实时解析 `user-service` 实例地址并调用 `GET /api/users/{id}`，固定地址配置已删除；用户存在 200、用户不存在 400 且不写库、实例列表为空 503 | §7、§9、`flow-success.png`、`flow-503.png` |
+| ③ 依赖下线 / 失败 / 恢复与健康状态 | 通过。停机后 Nacos 实例 2.2 秒归零、业务请求 503 且 `lost_items` 行数不变（28→28），恢复 14.7 秒重新注册后 200 且行数 +1；三种“健康”概念已区分说明 | §8、§9、`actuator-health.png`、`flow-recovered.png` |
+| ④ 验证脚本 | 通过。`scripts/smoke-test.sh` 检查 Nacos 控制台页面（18080）+ 三个服务 `/actuator/health`，4 项全通过时退出码 0，控制台不可达 / 旧地址 / 任一服务不可用时退出码 1 | §10、`smoke-test.png`、`test-results.png` |
+
+整体结论：四个小题的要求均已实现并实测通过；节点上下线后调用方无需重启即可自动感知，失败路径不会绕过校验写入本地记录。仓库中不含真实密码或 Token（仅本地 `.env`，已被 `.gitignore` 忽略；提交的是 `.env.example` 占位模板）。
+
+截图清单（`docs/homework/week-07/screenshots/`）：
+
+| 文件 | 内容 |
+| --- | --- |
+| `nacos-start.png` | Nacos 启动并可登录控制台 |
+| `nacos-list.png` | 服务列表：3 个服务、分组 `ZCL_GROUP`、实例数均 1 |
+| `nacos-user.png` / `nacos-lost.png` / `nacos-admin.png` | 三个服务的实例详情（IP、端口、健康、临时实例） |
+| `flow-success.png` | 业务调用成功（200，发布成功） |
+| `flow-503.png` | 依赖不可用（503，无可用实例） |
+| `actuator-health.png` | `/actuator/health` 健康接口（含 db、diskSpace 等组件） |
+| `flow-recovered.png` | 恢复后再次调用成功（200） |
+| `smoke-test.png` | 冒烟脚本运行结果（4 项 PASS，退出码 0） |
+| `test-results.png` | 三个服务单元测试结果（BUILD SUCCESS） |

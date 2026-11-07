@@ -220,7 +220,12 @@ docker compose ps
 docker compose logs user-service lost-service admin-service | grep "register finished"
 ```
 
-控制台「服务管理 → 服务列表」可见 3 个服务，实例数均为 1；点开服务详情可看到实例 IP 与端口：
+**查看服务列表的方法**：
+
+1. 浏览器打开控制台 <http://localhost:18080>（映射的是容器 8080，不是旧版 `8848/nacos` 地址）；
+2. 用 `nacos` 账号登录（密码见本机 `.env` 的 `NACOS_PASSWORD`）；
+3. 左侧「服务管理 → 服务列表」，命名空间选 `public`，即可看到 3 个服务、分组 `ZCL_GROUP`、实例数均为 1；
+4. 点开某个服务详情，可看到实例 IP、端口、健康状态与是否临时实例。
 
 | 服务名 | 分组 | 实例 IP:端口 | 健康状态 |
 | --- | --- | --- | --- |
@@ -283,21 +288,43 @@ curl -i -X POST http://localhost:8082/api/lost-items \
 
 ### 8. 各服务测试命令
 
+进入对应服务目录执行（无需先启动 MySQL / Nacos）：
+
 ```bash
 cd services/user-service && ./mvnw test
 cd services/lost-service && ./mvnw test
 cd services/admin-service && ./mvnw test
 ```
 
-> 测试**不依赖真实 MySQL 与 Nacos**：测试类中已关闭 Nacos 注册/发现，并把数据源切换为 H2 内存库（`com.h2database:h2`，test 作用域），无需先启动任何中间件即可执行。`lost-service` 另有 4 个服务发现用例（空实例列表、按发现地址调用、404 保留业务响应、每次调用重新寻址）。
+> Windows PowerShell 里不能写 `./mvnw`（PowerShell 要求带扩展名，且 `scripts/` 目录下没有 wrapper），请先进到服务目录再执行 `.\mvnw.cmd test`；Git Bash 里则用 `bash mvnw test`。
 
-### 9. 冒烟测试
+> 测试**不依赖真实 MySQL 与 Nacos**：测试类中关闭了 Nacos 发现与自动注册（`spring.cloud.nacos.discovery.enabled=false`、`register-enabled=false`、`service-registry.auto-registration.enabled=false`），数据源切换为 H2 内存库（`com.h2database:h2`，test 作用域），下游 HTTP 用 `MockRestServiceServer` 模拟。`lost-service` 另有 4 个服务发现用例（空实例列表、按发现地址调用、404 保留业务响应、每次调用重新寻址）。
+
+### 9. 冒烟脚本（在仓库根目录执行）
 
 ```bash
+# 从仓库根目录运行
 bash scripts/smoke-test.sh
 ```
 
-脚本依次检查 user-service(8081) / lost-service(8082) / admin-service(8083) 的 `/actuator/health`；**任一服务不可用时以非零状态退出**，便于自动化检查。
+脚本共检查 **4 项**，**任一失败即以非零状态退出**（不会忽略错误后仍报成功）：
+
+| # | 检查项 | 说明 |
+| --- | --- | --- |
+| 1 | Nacos 控制台页面可访问 | 使用实际映射地址 `http://localhost:18080`（容器 8080 → 宿主 18080），**不是旧版 `8848/nacos`**；脚本会跟随 3.x 控制台的 `/` → `/next/` 跳转，并校验返回的是控制台 HTML 页面 |
+| 2 | `user-service` (8081) `/actuator/health` | 要求响应含 `"status":"UP"` |
+| 3 | `lost-service` (8082) `/actuator/health` | 同上 |
+| 4 | `admin-service` (8083) `/actuator/health` | 同上 |
+
+退出码：全部通过返回 `0`，任一失败返回 `1`。脚本**不输出任何密码或 Token**。
+
+需要指向其他控制台地址时（默认已是 18080）：
+
+```bash
+NACOS_CONSOLE_URL=http://localhost:18080 bash scripts/smoke-test.sh
+```
+
+> 注意：控制台能打开 ≠ 业务调用成功。业务请求（200 / 400 / 503）的结果验证见上面第 7、10 节。
 
 ### 10. 健康接口与依赖下线/恢复验证
 
