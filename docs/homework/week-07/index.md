@@ -89,18 +89,18 @@ Nacos 控制台「服务管理 → 服务列表」可见 3 个业务服务，实
 
 | 服务名 | 分组 | 实例 IP | 端口 | 健康 | 临时实例 |
 | --- | --- | --- | --- | --- | --- |
-| user-service | ZCL_GROUP | 172.19.0.6 | 8081 | 健康 | true |
+| user-service | ZCL_GROUP | 172.19.0.5 | 8081 | 健康 | true |
 | lost-service | ZCL_GROUP | 172.19.0.7 | 8082 | 健康 | true |
-| admin-service | ZCL_GROUP | 172.19.0.5 | 8083 | 健康 | true |
+| admin-service | ZCL_GROUP | 172.19.0.6 | 8083 | 健康 | true |
 
 实例详情截图：
 
 | 服务 | 截图 |
 | --- | --- |
 | 服务列表（3 个服务，分组 ZCL_GROUP，实例数均为 1） | ![服务列表](./screenshots/nacos-list.png) |
-| user-service（172.19.0.6:8081） | ![user-service 实例](./screenshots/nacos-user.png) |
+| user-service（172.19.0.5:8081） | ![user-service 实例](./screenshots/nacos-user.png) |
 | lost-service（172.19.0.7:8082） | ![lost-service 实例](./screenshots/nacos-lost.png) |
-| admin-service（172.19.0.5:8083） | ![admin-service 实例](./screenshots/nacos-admin.png) |
+| admin-service（172.19.0.6:8083） | ![admin-service 实例](./screenshots/nacos-admin.png) |
 
 > 实例 IP 为容器在 `micro-net` 网络内的地址；从宿主机访问服务仍用 8081 / 8082 / 8083。
 
@@ -117,9 +117,9 @@ docker compose logs user-service lost-service admin-service | grep "register fin
 三个服务启动日志中的关键输出：
 
 ```
-nacos registry, ZCL_GROUP user-service 172.19.0.6:8081 register finished
+nacos registry, ZCL_GROUP user-service 172.19.0.5:8081 register finished
 nacos registry, ZCL_GROUP lost-service 172.19.0.7:8082 register finished
-nacos registry, ZCL_GROUP admin-service 172.19.0.5:8083 register finished
+nacos registry, ZCL_GROUP admin-service 172.19.0.6:8083 register finished
 ```
 
 命令行核对（需使用本机 `.env` 中的管理员密码）：
@@ -222,7 +222,111 @@ curl -i -X POST http://localhost:8082/api/lost-items \
 | `returnsFalseWhenUserNotFoundButInstancesExist` | 对方 404 时返回 false，不当作依赖不可用 |
 | `queriesDiscoveryOnEveryCall` | 两次业务调用触发两次 `getInstances`，证明没有缓存地址 |
 
-## 8. 测试与冒烟脚本
+## 8. Actuator 健康端点与三种“健康”的区别
+
+三个服务均保留 `spring-boot-starter-actuator` 依赖，并在 `application.yml` 中显式配置：
+
+```yaml
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+```
+
+实测 `GET http://localhost:8081/actuator/health`（8082 / 8083 相同结构，节选）：
+
+```json
+{
+  "components": {
+    "db": { "status": "UP" },
+    "discoveryComposite": {
+      "components": {
+        "discoveryClient": {
+          "details": { "services": "user-service lost-service admin-service" },
+          "status": "UP"
+        }
+      },
+      "status": "UP"
+    },
+    "diskSpace": { "status": "UP" },
+    "livenessState": { "status": "UP" },
+    "ping": { "status": "UP" },
+    "readinessState": { "status": "UP" }
+  },
+  "status": "UP"
+}
+```
+
+### 8.1 三种“健康”的区别（以本系统为例）
+
+| 概念 | 在本系统中的体现 | 由谁维护 | 变化条件 |
+| --- | --- | --- | --- |
+| SDK 连接存活 | `user-service` 内 nacos-client 与 Nacos 服务端（8848 / gRPC 9848）之间的长连接与心跳 | nacos-client 后台心跳线程 | 进程被杀、容器停止、网络断开 → 心跳停止 |
+| 注册实例状态 | 控制台「服务列表」中 `user-service` 实例数=1、健康=健康、临时实例=true | Nacos 服务端 | 客户端启动注册（上线）；心跳超时或连接断开后服务端剔除临时实例；或主动注销 |
+| Actuator 应用健康 | `GET /actuator/health` 返回 `status=UP`，含 `db`、`diskSpace`、`liveness/readiness` 等组件 | 应用自身的 HealthIndicator | 应用内部组件异常（例如数据库连不上）→ 该接口变 `DOWN` |
+
+要点（作业要求不要误解的地方）：
+
+*   **不要把 Actuator 的 UP/DOWN 当作 Nacos 的注册状态**。本系统中 `/actuator/health` 检查的是应用自身的数据库连通性、磁盘空间、存活/就绪状态，它**不会**向 Nacos 上报；Nacos 列表里是否还有该实例，取决于 SDK 心跳与连接（临时实例）。
+*   **Actuator 返回 DOWN 不会自动让 Nacos 摘除实例**。本周**没有**做“健康状态与注册联动”（既没有把 health 结果推给 Nacos，也没有在 DOWN 时调用注销接口），因此即使健康检查失败，实例仍会留在列表里，直到心跳超时或连接断开被服务端剔除。
+*   反过来，**服务停止后 Actuator 立即不可访问，而 Nacos 实例是稍后消失的**：实测停掉 `user-service` 后，其 `/actuator/health` 立刻变成连接不可达（容器已停），而 Nacos 中该实例约 **2.2 秒**后才从 1 变为 0。
+
+## 9. 依赖下线、失败与恢复的验证记录
+
+### 9.1 停止与恢复命令
+
+```bash
+# 停止被调用方（只 stop，不删除容器，实例 IP 保持不变）
+docker compose stop user-service
+
+# 恢复
+docker compose start user-service
+```
+
+### 9.2 业务请求与数据检查命令
+
+```bash
+# 业务请求：每次换新的业务参数，便于判断是否新增记录
+curl -i -X POST http://localhost:8082/api/lost-items \
+  -H 'Content-Type: application/json' \
+  -d '{"itemName":"umbrella-after-actuator","feature":"black-long-handle","userId":1}'
+
+# 数据检查：lost_items 行数
+docker exec -e MYSQL_PWD=<本地 .env 中的 MYSQL_ROOT_PASSWORD> \
+  microservices-practice-2412190605-lost-db-1 \
+  mysql -uroot -D lost_db -e "SELECT COUNT(*) FROM lost_items;"
+```
+
+### 9.3 实测过程与结果
+
+| 阶段 | 操作 | 健康接口 | Nacos 实例数 | 业务请求 | `lost_items` 行数 |
+| --- | --- | --- | --- | --- | --- |
+| ① 全部正常 | — | 8081 / 8082 / 8083 均 `UP` | user=1 lost=1 admin=1 | **200**，`发布成功，失物ID：28` | 27 → **28**（+1，已落库） |
+| ② 下线 | `docker compose stop user-service` | 8081 立即不可达；8082 / 8083 仍 `UP` | user 在 **2.2 秒**后变为 0，lost/admin 仍为 1 | — | 28（不变） |
+| ③ 失败 | 用新的有效参数再次请求 | — | user=0 | **503**，`依赖服务不可用：no available instance of service 'user-service'` | **28 → 28（+0）**，未绕过校验写库 |
+| ④ 恢复 | `docker compose start user-service` | 8081 重新 `UP`（各组件均正常） | user 在 **14.7 秒**后重新变为 1 | — | 28（不变） |
+| ⑤ 恢复后复查 | 再次发起同样请求 | 8081 `UP` | user=1 | **200**，`发布成功，失物ID：29` | 28 → **29**（+1，已落库） |
+
+结论：
+
+*   **依赖校验失败不会新增本地记录**：③ 阶段返回 503，`lost_items` 行数保持 28，说明没有跳过校验、也没有部分写入。
+*   **恢复后无需重启调用方**：④ → ⑤ 期间 `lost-service` 未重启，请求直接恢复成功，因为每次请求都实时向 `DiscoveryClient` 取实例地址。
+*   **不存在“旧地址连接失败”窗口**：由于不缓存地址，实例被摘除后下一次请求直接看到空列表并返回 503（`no available instance`），不会拿旧 IP 去连接；若缓存了旧地址，才会出现“连接被拒绝/超时”这类错误。
+*   **事务边界**：③ 的失败发生在 `entityManager.persist()` 之前，因此本地无写入；但本周**未实现**分布式事务或自动补偿——若跨服务调用成功、本地提交前失败，仍存在部分成功的窗口（按作业要求不实现补偿）。
+
+截图：
+
+| 场景 | 截图 |
+| --- | --- |
+| 应用健康接口（`/actuator/health`） | ![健康接口](./screenshots/actuator-health.png) |
+| 下线后失败（503） | ![下线失败](./screenshots/flow-503.png) |
+| 恢复后成功（200） | ![恢复成功](./screenshots/flow-recovered.png) |
+
+## 10. 测试与冒烟脚本
 
 ### 单元测试（不依赖真实 MySQL / Nacos）
 
@@ -248,7 +352,7 @@ bash scripts/smoke-test.sh
 
 覆盖三个服务的 `/actuator/health`；三个正常时退出码 0，任一不可用时退出码 1（均已实测）。
 
-## 9. 本周未做
+## 11. 本周未做
 
 *   只取实例列表中的第一个实例，未实现轮询、权重路由、自动重试与熔断（按本周要求）。
 *   未引入 Nacos Config Starter（按本周要求）。

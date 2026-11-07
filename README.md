@@ -224,9 +224,9 @@ docker compose logs user-service lost-service admin-service | grep "register fin
 
 | 服务名 | 分组 | 实例 IP:端口 | 健康状态 |
 | --- | --- | --- | --- |
-| user-service | ZCL_GROUP | 172.19.0.6:8081 | 健康 |
+| user-service | ZCL_GROUP | 172.19.0.5:8081 | 健康 |
 | lost-service | ZCL_GROUP | 172.19.0.7:8082 | 健康 |
-| admin-service | ZCL_GROUP | 172.19.0.5:8083 | 健康 |
+| admin-service | ZCL_GROUP | 172.19.0.6:8083 | 健康 |
 
 > 实例 IP 是容器在 `micro-net` 网络中的地址，与宿主机发布的 8081 / 8082 / 8083 一一对应。
 
@@ -298,5 +298,46 @@ bash scripts/smoke-test.sh
 ```
 
 脚本依次检查 user-service(8081) / lost-service(8082) / admin-service(8083) 的 `/actuator/health`；**任一服务不可用时以非零状态退出**，便于自动化检查。
+
+### 10. 健康接口与依赖下线/恢复验证
+
+三个服务都保留 Actuator，并配置了健康明细：
+
+```yaml
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+```
+
+```bash
+curl http://localhost:8081/actuator/health   # user-service
+curl http://localhost:8082/actuator/health   # lost-service
+curl http://localhost:8083/actuator/health   # admin-service
+```
+
+验证依赖下线与恢复（`lost-service` 调用 `user-service` 校验用户）：
+
+```bash
+# ① 正常：成功并落库
+curl -i -X POST http://localhost:8082/api/lost-items -H 'Content-Type: application/json' \
+  -d '{"itemName":"umbrella","feature":"black","userId":1}'
+
+# ② 下线被调用方，观察 Nacos 实例数变为 0
+docker compose stop user-service
+
+# ③ 用新的有效参数请求：返回 503，且数据库不新增记录
+curl -i -X POST http://localhost:8082/api/lost-items -H 'Content-Type: application/json' \
+  -d '{"itemName":"umbrella-while-down","feature":"black","userId":1}'
+
+# ④ 恢复：等待重新注册后可再次成功
+docker compose start user-service
+```
+
+⚠️ 注意：Actuator 的 `UP/DOWN` 是应用自身健康（`db`、`diskSpace`、`liveness/readiness`），**不会**自动影响 Nacos 注册状态；实例是否被摘除由 SDK 心跳/连接决定。
 
 

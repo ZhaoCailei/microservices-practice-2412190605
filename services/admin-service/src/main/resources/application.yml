@@ -23,3 +23,13 @@ spring:
     hibernate:
       ddl-auto: update
     show-sql: true
+
+# Actuator 健康端点：/actuator/health，暴露组件明细（db、diskSpace 等）
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
