@@ -8,7 +8,8 @@ spring:
   datasource:
     url: jdbc:mysql://localhost:3306/lostfound_db?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&createDatabaseIfNotExist=true
     username: root
-    password: Lei040925%
+    # 真实密码由环境变量注入，仓库中不留明文
+    password: "${SPRING_DATASOURCE_PASSWORD:}"
     driver-class-name: com.mysql.cj.jdbc.Driver
 
   jpa:

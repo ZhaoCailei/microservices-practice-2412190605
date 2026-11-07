@@ -4,12 +4,20 @@ server:
 spring:
   application:
     name: admin-service
+  cloud:
+    nacos:
+      discovery:
+        server-addr: ${NACOS_SERVER_ADDR:nacos:8848}
+        username: ${NACOS_USERNAME:nacos}
+        password: "${NACOS_PASSWORD:}"
+        group: DEFAULT_GROUP
+        register-enabled: true
   datasource:
     # 本机跑用 localhost；docker compose 里通过 DB_HOST=admin-db 覆盖
     url: jdbc:mysql://${DB_HOST:localhost}:3306/admin_db?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&createDatabaseIfNotExist=true
     username: root
-    # % 是特殊字符，统一加引号；容器里由 SPRING_DATASOURCE_PASSWORD 覆盖
-    password: "${SPRING_DATASOURCE_PASSWORD:Lei040925%}"
+    # 密码由 SPRING_DATASOURCE_PASSWORD 注入（compose 中取自本地 .env），仓库里不留真实密码
+    password: "${SPRING_DATASOURCE_PASSWORD:}"
     driver-class-name: com.mysql.cj.jdbc.Driver
   jpa:
     hibernate:

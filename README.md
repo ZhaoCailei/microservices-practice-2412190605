@@ -172,3 +172,89 @@ cd services/user-service
 ./mvnw test
 ```
 
+# 第七周：Nacos 部署与服务注册
+
+### 1. 部署组件
+
+*   镜像：`nacos/nacos-server:v3.2.4`，单机模式（`MODE=standalone`），编排在根目录 `compose.yaml` 的 `nacos` 服务中。
+*   鉴权：已开启，Token 密钥与 server identity 由本地 `.env` 注入（`NACOS_AUTH_TOKEN`、`NACOS_AUTH_IDENTITY_KEY`、`NACOS_AUTH_IDENTITY_VALUE`）；仓库只提交不含真实凭据的 `.env.example`。
+*   持久化：`nacos-data`（挂载 `/home/nacos/data`）与 `nacos-logs`（挂载 `/home/nacos/logs`）两个命名数据卷。
+*   三个业务服务通过 `spring-cloud-starter-alibaba-nacos-discovery` 注册，服务名即各自的 `spring.application.name`。
+
+### 2. 端口说明（控制台端口 / 服务端 / SDK 三者分离）
+
+| 用途 | 容器端口 | 宿主机端口 | 说明 |
+| --- | --- | --- | --- |
+| 控制台 UI | 8080 | **18080** | Nacos 3.x 控制台独立端口，访问 <http://localhost:18080> |
+| 服务端 HTTP API | 8848 | 8848 | 服务注册、发现与 OpenAPI |
+| 客户端 gRPC | 9848 | 9848 | SDK 长连接端口（8848 + 1000） |
+
+三个端口均只绑定 `127.0.0.1`，不对局域网或公网暴露。
+
+### 3. 启动命令（必须先启动 Nacos，再启动业务服务）
+
+```bash
+# 0) 首次使用：准备本地环境变量（真实密码/Token 只写进 .env，该文件已被 .gitignore 忽略）
+cp .env.example .env
+
+# 1) 先单独启动 Nacos
+docker compose up -d nacos
+
+# 2) 首次使用：浏览器打开 http://localhost:18080 初始化管理员密码
+#    用户名固定为 nacos，密码自行设置，并同步写进本机 .env 的 NACOS_PASSWORD
+
+# 3) 再启动三个业务服务（构建镜像，启动后自动注册到 Nacos）
+docker compose up -d --build user-service lost-service admin-service
+```
+
+### 4. 控制台地址与账号
+
+*   控制台：<http://localhost:18080>
+*   用户名：`nacos`
+*   密码：见本机 `.env` 中的 `NACOS_PASSWORD`
+
+### 5. 服务注册验证
+
+```bash
+docker compose ps
+docker compose logs user-service lost-service admin-service | grep "register finished"
+```
+
+控制台「服务管理 → 服务列表」可见 3 个服务，实例数均为 1；点开服务详情可看到实例 IP 与端口：
+
+| 服务名 | 分组 | 实例 IP:端口 | 健康状态 |
+| --- | --- | --- | --- |
+| user-service | DEFAULT_GROUP | 172.19.0.5:8081 | 健康 |
+| lost-service | DEFAULT_GROUP | 172.19.0.7:8082 | 健康 |
+| admin-service | DEFAULT_GROUP | 172.19.0.6:8083 | 健康 |
+
+> 实例 IP 是容器在 `micro-net` 网络中的地址，与宿主机发布的 8081 / 8082 / 8083 一一对应。
+
+### 6. 注册相关配置要点
+
+*   三个服务的 `application.yml` 均已配置：
+
+```yaml
+spring:
+  cloud:
+    nacos:
+      discovery:
+        server-addr: ${NACOS_SERVER_ADDR:nacos:8848}
+        username: ${NACOS_USERNAME:nacos}
+        password: "${NACOS_PASSWORD:}"
+        group: DEFAULT_GROUP
+        register-enabled: true
+```
+
+*   容器内访问 Nacos 必须用服务名 `nacos:8848`，不能写 `localhost`；本机直接运行服务时可用 `NACOS_SERVER_ADDR=localhost:8848` 覆盖。
+*   版本由 BOM 统一管理：Spring Cloud `2025.1.4` + Spring Cloud Alibaba `2025.1.0.0`（与 Spring Boot 4.1.2 匹配）。各服务只声明 `spring-cloud-starter-alibaba-nacos-discovery`，**不单独覆盖 nacos-client 版本**；本周**未引入** Config Starter。
+
+### 7. 各服务测试命令
+
+```bash
+cd services/user-service && ./mvnw test
+cd services/lost-service && ./mvnw test
+cd services/admin-service && ./mvnw test
+```
+
+

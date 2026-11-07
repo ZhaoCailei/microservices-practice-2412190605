@@ -54,7 +54,12 @@ services:
     environment:
       SPRING_DATASOURCE_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123456}
       DB_HOST: user-db
+      NACOS_SERVER_ADDR: ${NACOS_SERVER_ADDR:-nacos:8848}
+      NACOS_USERNAME: ${NACOS_USERNAME:-nacos}
+      NACOS_PASSWORD: ${NACOS_PASSWORD}
     depends_on:
+      nacos:
+        condition: service_started
       user-db:
         condition: service_healthy
     networks:
@@ -68,9 +73,13 @@ services:
     environment:
       SPRING_DATASOURCE_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123456}
       DB_HOST: lost-db
-      # 容器内访问 user-service 要用服务名，不能用 localhost
-      USER_SERVICE_URL: http://user-service:8081/api/users
+      NACOS_SERVER_ADDR: ${NACOS_SERVER_ADDR:-nacos:8848}
+      NACOS_USERNAME: ${NACOS_USERNAME:-nacos}
+      NACOS_PASSWORD: ${NACOS_PASSWORD}
+
     depends_on:
+      nacos:
+        condition: service_started
       lost-db:
         condition: service_healthy
       user-service:
@@ -86,17 +95,43 @@ services:
     environment:
       SPRING_DATASOURCE_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123456}
       DB_HOST: admin-db
+      NACOS_SERVER_ADDR: ${NACOS_SERVER_ADDR:-nacos:8848}
+      NACOS_USERNAME: ${NACOS_USERNAME:-nacos}
+      NACOS_PASSWORD: ${NACOS_PASSWORD}
     depends_on:
+      nacos:
+        condition: service_started
       admin-db:
         condition: service_healthy
     networks:
       - micro-net
 
+  # =========== Nacos 注册中心 ===========
+  nacos:
+    image: nacos/nacos-server:v3.2.4
+    container_name: nacos
+    environment:
+      - MODE=standalone
+      - NACOS_AUTH_ENABLE=${NACOS_AUTH_ENABLE:-true}
+      - NACOS_AUTH_IDENTITY_KEY=${NACOS_AUTH_IDENTITY_KEY:-serverIdentity}
+      - NACOS_AUTH_IDENTITY_VALUE=${NACOS_AUTH_IDENTITY_VALUE:-security}
+      - NACOS_AUTH_TOKEN=${NACOS_AUTH_TOKEN:-U2VjdXJlQXV0aFRva2VuMTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI=}
+    ports:
+      # 只绑定本机回环地址，控制台/服务端/SDK 端口不暴露到局域网或公网
+      - "127.0.0.1:18080:8080"   # 控制台 UI（Nacos 3.x 控制台独立端口，容器内 8080）
+      - "127.0.0.1:8848:8848"    # 服务端 HTTP OpenAPI
+      - "127.0.0.1:9848:9848"    # 客户端 gRPC（= 8848 + 1000）
+    volumes:
+      - nacos-data:/home/nacos/data
+      - nacos-logs:/home/nacos/logs
+    networks:
+      - micro-net
 networks:
   micro-net:
     driver: bridge
-
 volumes:
   user-db-data:
   lost-db-data:
   admin-db-data:
+  nacos-data:
+  nacos-logs:
