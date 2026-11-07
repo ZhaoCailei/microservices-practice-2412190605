@@ -10,7 +10,7 @@ spring:
         server-addr: ${NACOS_SERVER_ADDR:nacos:8848}
         username: ${NACOS_USERNAME:nacos}
         password: "${NACOS_PASSWORD:}"
-        group: DEFAULT_GROUP
+        group: ${NACOS_GROUP:ZCL_GROUP}
         register-enabled: true
   datasource:
     # 本机跑用 localhost；docker compose 里通过 DB_HOST=lost-db 覆盖
@@ -24,9 +24,3 @@ spring:
     hibernate:
       ddl-auto: update
     show-sql: true
-
-# 被依赖的 user-service 地址（UserClient 用 @Value("${user.service.url}") 读取）
-# 本机跑用 localhost:8081；docker compose 里通过 USER_SERVICE_URL 覆盖成 http://user-service:8081/api/users
-user:
-  service:
-    url: "${USER_SERVICE_URL:http://localhost:8081/api/users}"

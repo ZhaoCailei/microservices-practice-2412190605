@@ -1,4 +1,9 @@
-### 1. 测试跨服务调用（成功）
+
+# 验证流程：lost-service(8082) 发布失物前，通过 Nacos 服务发现调用 user-service 的 GET /api/users/{id} 校验用户
+# 依赖服务已注册在 Nacos 的 public 命名空间、ZCL_GROUP 分组
+# 使用前提：docker compose up -d nacos，且 user-service / lost-service 已启动
+
+### 1. 正常场景：用户存在（期望 200，发布成功）
 POST http://localhost:8082/api/lost-items
 Content-Type: application/json
 
@@ -8,7 +13,7 @@ Content-Type: application/json
   "userId": 1
 }
 
-### 2. 测试跨服务调用（失败拦截）
+### 2. 业务拦截：用户不存在（期望 400，保留原有业务响应，不写库）
 POST http://localhost:8082/api/lost-items
 Content-Type: application/json
 
@@ -17,7 +22,20 @@ Content-Type: application/json
   "feature": "红颜色",
   "userId": 999
 }
-### 测试管理服务：审核通过失物
+
+### 3. 依赖不可用：实例列表为空（期望 503）
+# 发送前先在仓库根目录执行：docker compose stop user-service
+# 测完执行：docker compose start user-service 恢复（约十几秒后可再次成功）
+POST http://localhost:8082/api/lost-items
+Content-Type: application/json
+
+{
+  "itemName": "依赖不可用测试",
+  "feature": "停掉 user-service 后发送，实例列表为空",
+  "userId": 1
+}
+
+### 4. 管理服务：审核通过失物
 POST http://localhost:8083/api/admin/audits
 Content-Type: application/json
 

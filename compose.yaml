@@ -57,6 +57,7 @@ services:
       NACOS_SERVER_ADDR: ${NACOS_SERVER_ADDR:-nacos:8848}
       NACOS_USERNAME: ${NACOS_USERNAME:-nacos}
       NACOS_PASSWORD: ${NACOS_PASSWORD}
+      NACOS_GROUP: ${NACOS_GROUP:-ZCL_GROUP}
     depends_on:
       nacos:
         condition: service_started
@@ -76,6 +77,7 @@ services:
       NACOS_SERVER_ADDR: ${NACOS_SERVER_ADDR:-nacos:8848}
       NACOS_USERNAME: ${NACOS_USERNAME:-nacos}
       NACOS_PASSWORD: ${NACOS_PASSWORD}
+      NACOS_GROUP: ${NACOS_GROUP:-ZCL_GROUP}
 
     depends_on:
       nacos:
@@ -98,6 +100,7 @@ services:
       NACOS_SERVER_ADDR: ${NACOS_SERVER_ADDR:-nacos:8848}
       NACOS_USERNAME: ${NACOS_USERNAME:-nacos}
       NACOS_PASSWORD: ${NACOS_PASSWORD}
+      NACOS_GROUP: ${NACOS_GROUP:-ZCL_GROUP}
     depends_on:
       nacos:
         condition: service_started

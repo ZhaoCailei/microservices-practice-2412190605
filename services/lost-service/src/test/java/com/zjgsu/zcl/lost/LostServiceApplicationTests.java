@@ -2,6 +2,8 @@ package com.zjgsu.zcl.lost;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.cloud.client.discovery.DiscoveryClient;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 @SpringBootTest(properties = {
 		// 测试不依赖真实 Nacos：关闭注册与发现
@@ -17,6 +19,11 @@ import org.springframework.boot.test.context.SpringBootTest;
 		"spring.sql.init.mode=never"
 })
 class LostServiceApplicationTests {
+
+	/** 关闭 Nacos 发现后没有真实的 DiscoveryClient，用 Mock 补齐，保证上下文可加载 */
+	@MockitoBean
+	private DiscoveryClient discoveryClient;
+
 	@Test
 	void contextLoads() {
 		// 验证 Spring 上下文能否正常加载

@@ -224,9 +224,9 @@ docker compose logs user-service lost-service admin-service | grep "register fin
 
 | 服务名 | 分组 | 实例 IP:端口 | 健康状态 |
 | --- | --- | --- | --- |
-| user-service | DEFAULT_GROUP | 172.19.0.5:8081 | 健康 |
-| lost-service | DEFAULT_GROUP | 172.19.0.7:8082 | 健康 |
-| admin-service | DEFAULT_GROUP | 172.19.0.6:8083 | 健康 |
+| user-service | ZCL_GROUP | 172.19.0.6:8081 | 健康 |
+| lost-service | ZCL_GROUP | 172.19.0.7:8082 | 健康 |
+| admin-service | ZCL_GROUP | 172.19.0.5:8083 | 健康 |
 
 > 实例 IP 是容器在 `micro-net` 网络中的地址，与宿主机发布的 8081 / 8082 / 8083 一一对应。
 
@@ -242,19 +242,61 @@ spring:
         server-addr: ${NACOS_SERVER_ADDR:nacos:8848}
         username: ${NACOS_USERNAME:nacos}
         password: "${NACOS_PASSWORD:}"
-        group: DEFAULT_GROUP
+        group: ${NACOS_GROUP:ZCL_GROUP}
         register-enabled: true
 ```
+
+*   命名空间使用默认的 `public`，三个服务一致；分组统一为 `ZCL_GROUP`（由 `.env` 中的 `NACOS_GROUP` 注入），不与课堂示例的默认分组混用。
 
 *   容器内访问 Nacos 必须用服务名 `nacos:8848`，不能写 `localhost`；本机直接运行服务时可用 `NACOS_SERVER_ADDR=localhost:8848` 覆盖。
 *   版本由 BOM 统一管理：Spring Cloud `2025.1.4` + Spring Cloud Alibaba `2025.1.0.0`（与 Spring Boot 4.1.2 匹配）。各服务只声明 `spring-cloud-starter-alibaba-nacos-discovery`，**不单独覆盖 nacos-client 版本**；本周**未引入** Config Starter。
 
-### 7. 各服务测试命令
+### 7. 服务发现与业务调用（发布失物前校验用户）
+
+`lost-service` 发布失物（`POST /api/lost-items`）时，需要先调用 `user-service` 的 `GET /api/users/{id}` 校验用户是否存在。该调用**不再使用固定地址**，而是每次请求都通过 `DiscoveryClient` 实时解析实例：
+
+```java
+List<ServiceInstance> instances = discoveryClient.getInstances("user-service");
+if (instances.isEmpty()) {
+    throw new UserServiceUnavailableException(...);   // 控制器 -> 503
+}
+URI uri = instance.getUri() + "/api/users/" + userId; // 用发现的地址 + 原业务路径
+```
+
+行为约定：
+
+| 情况 | 返回 |
+| --- | --- |
+| 用户存在 | `200`，发布成功 |
+| 用户不存在（user-service 返回 404） | `400`，保留原有业务响应，不写库 |
+| Nacos 中 `user-service` 实例列表为空 / 连接失败 / 超时 | `503`，依赖服务不可用，不写库 |
+
+试用：
+
+```bash
+curl -i -X POST http://localhost:8082/api/lost-items \
+  -H 'Content-Type: application/json' \
+  -d '{"itemName":"校园卡","feature":"蓝色卡套","userId":1}'
+```
+
+验证依赖下线/恢复：`docker compose stop user-service` 后再次请求会得到 503，`docker compose start user-service` 后（约十几秒重新注册）自动恢复为 200。
+
+### 8. 各服务测试命令
 
 ```bash
 cd services/user-service && ./mvnw test
 cd services/lost-service && ./mvnw test
 cd services/admin-service && ./mvnw test
 ```
+
+> 测试**不依赖真实 MySQL 与 Nacos**：测试类中已关闭 Nacos 注册/发现，并把数据源切换为 H2 内存库（`com.h2database:h2`，test 作用域），无需先启动任何中间件即可执行。`lost-service` 另有 4 个服务发现用例（空实例列表、按发现地址调用、404 保留业务响应、每次调用重新寻址）。
+
+### 9. 冒烟测试
+
+```bash
+bash scripts/smoke-test.sh
+```
+
+脚本依次检查 user-service(8081) / lost-service(8082) / admin-service(8083) 的 `/actuator/health`；**任一服务不可用时以非零状态退出**，便于自动化检查。
 
 
