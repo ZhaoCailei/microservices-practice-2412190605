@@ -7,8 +7,9 @@
         <sourceTestOutputDir name="target/generated-test-sources/test-annotations" />
         <outputRelativeToContentRoot value="true" />
         <module name="lost-service" />
-        <module name="admin-service" />
         <module name="user-service" />
+        <module name="monolith" />
+        <module name="admin-service" />
       </profile>
     </annotationProcessing>
   </component>
@@ -16,6 +17,7 @@
     <option name="ADDITIONAL_OPTIONS_OVERRIDE">
       <module name="admin-service" options="-parameters" />
       <module name="lost-service" options="-parameters" />
+      <module name="monolith" options="-parameters" />
       <module name="user-service" options="-parameters" />
     </option>
   </component>

@@ -11,7 +11,7 @@
 
 # 2
 
-启动命令：mvn spring-boot:run
+启动命令：./mvnw spring-boot:run
 
 接口 1：健康检查接口
 
@@ -21,12 +21,12 @@
 {"status":"UP"}
 ```
 
- 接口 2：获取失物列表接口
+接口 2：问候接口
 
-请求地址：`http://127.0.0.1:8080/lost/list`响应：
+请求地址：`http://127.0.0.1:8080/api/hello`响应：
 
 ```
-{"code":200,"msg":"查询成功","data":[{"id":1,"name":"黑色雨伞","place":"教学楼201"}]}
+校园失物招领系统 - 运行正常！
 ```
 
 # 3
@@ -35,7 +35,7 @@
 
 运行结果：
 
-![79138476272](D:\MyGithub\microservices-practice-2412190605\docs\homework\week-03\assets\1791384762721.png)
+![测试通过](assets/1791384762721.png)
 
 # 4.汇总
 

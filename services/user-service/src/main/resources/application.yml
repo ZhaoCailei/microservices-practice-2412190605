@@ -15,7 +15,8 @@ spring:
   datasource:
     # 本机跑用 localhost；docker compose 里通过 DB_HOST=user-db 覆盖
     url: jdbc:mysql://${DB_HOST:localhost}:3306/user_db?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&createDatabaseIfNotExist=true
-    username: root
+    # 独立业务账号：compose 中由 DB_USER 注入（只对本库有权限），本地开发可退回 root
+    username: ${DB_USER:root}
     # 密码由 SPRING_DATASOURCE_PASSWORD 注入（compose 中取自本地 .env），仓库里不留真实密码
     password: "${SPRING_DATASOURCE_PASSWORD:}"
     driver-class-name: com.mysql.cj.jdbc.Driver

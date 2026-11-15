@@ -3,7 +3,7 @@ server:
 
 spring:
   application:
-    name: lostfound-monolith
+    name: monolith
 
   datasource:
     url: jdbc:mysql://localhost:3306/lostfound_db?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&createDatabaseIfNotExist=true
@@ -12,9 +12,16 @@ spring:
     password: "${SPRING_DATASOURCE_PASSWORD:}"
     driver-class-name: com.mysql.cj.jdbc.Driver
 
+  # 让 data.sql 在启动时执行（MySQL 属外置库，默认不会执行 data.sql）
+  sql:
+    init:
+      mode: always
+
   jpa:
     hibernate:
       ddl-auto: update # 自动建表
+    # 等 Hibernate 建完表再执行 data.sql，否则会报 Table 'users' not found
+    defer-datasource-initialization: true
     show-sql: true
     properties:
       hibernate:

@@ -1,30 +1,51 @@
 package com.zjgsu.zcl.admin.controller;
 
 import com.zjgsu.zcl.admin.model.AuditRecord;
-import jakarta.persistence.EntityManager;
-import jakarta.persistence.PersistenceContext;
-import jakarta.transaction.Transactional;
+import com.zjgsu.zcl.admin.service.AuditService;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
+
+/**
+ * 审核服务的对外接口。Controller 只负责 HTTP：
+ * 接参数 → 调 Service → 把异常翻译成状态码。业务规则全部在 {@link AuditService}。
+ */
 @RestController
 @RequestMapping("/api/admin/audits")
 public class AdminController {
 
-    @PersistenceContext
-    private EntityManager entityManager;
+    private final AuditService auditService;
 
-    // 模拟管理员审核失物帖子
+    public AdminController(AuditService auditService) {
+        this.auditService = auditService;
+    }
+
+    /** 审核失物：成功 200；参数不合法 400；重复审核 409 */
     @PostMapping
-    @Transactional
-    public ResponseEntity<String> auditItem(@RequestBody AuditRecord record) {
-        // 在实际生产中，这里可能需要通过 RestTemplate 调用 lost-service 去确认帖子是否存在
-        // 为了演示，我们直接保存审核记录
-        if (!"APPROVED".equals(record.getStatus()) && !"REJECTED".equals(record.getStatus())) {
-            return ResponseEntity.badRequest().body("状态只能为 APPROVED 或 REJECTED");
+    public ResponseEntity<?> auditItem(@RequestBody AuditRecord record) {
+        try {
+            AuditRecord saved = auditService.audit(record);
+            return ResponseEntity.ok(saved);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(e.getMessage());
+        } catch (IllegalStateException e) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(e.getMessage());
         }
+    }
 
-        entityManager.persist(record);
-        return ResponseEntity.ok("审核完成！记录ID：" + record.getId());
+    /** 查询全部审核记录 */
+    @GetMapping
+    public ResponseEntity<List<AuditRecord>> list() {
+        return ResponseEntity.ok(auditService.findAll());
+    }
+
+    /** 按失物 ID 查审核结论：没有记录返回 404 */
+    @GetMapping("/{lostItemId}")
+    public ResponseEntity<AuditRecord> getByLostItemId(@PathVariable Long lostItemId) {
+        return auditService.findByLostItemId(lostItemId)
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.notFound().build());
     }
 }

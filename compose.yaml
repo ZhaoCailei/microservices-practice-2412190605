@@ -1,10 +1,13 @@
 services:
-  # =========== 数据库 ===========
+  # =========== 数据库（每个服务一个库 + 独立业务账号） ===========
   user-db:
     image: mysql:8.4.11
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123456}
       MYSQL_DATABASE: user_db
+      # 独立业务账号：只对 user_db 有权限，服务不再用 root 连接
+      MYSQL_USER: ${USER_DB_USER:-user_app}
+      MYSQL_PASSWORD: ${USER_DB_PASSWORD:-user_app_pwd}
     volumes:
       - user-db-data:/var/lib/mysql
     networks:
@@ -20,11 +23,13 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123456}
       MYSQL_DATABASE: lost_db
+      MYSQL_USER: ${LOST_DB_USER:-lost_app}
+      MYSQL_PASSWORD: ${LOST_DB_PASSWORD:-lost_app_pwd}
     volumes:
       - lost-db-data:/var/lib/mysql
     networks:
       - micro-net
-    healthcheck: # <--- 加上下面这 5 行
+    healthcheck:
       test: [ "CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-root123456}" ]
       interval: 5s
       timeout: 5s
@@ -35,11 +40,13 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123456}
       MYSQL_DATABASE: admin_db
+      MYSQL_USER: ${ADMIN_DB_USER:-admin_app}
+      MYSQL_PASSWORD: ${ADMIN_DB_PASSWORD:-admin_app_pwd}
     volumes:
       - admin-db-data:/var/lib/mysql
     networks:
       - micro-net
-    healthcheck: # <--- 加上这部分
+    healthcheck:
       test: [ "CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-root123456}" ]
       interval: 5s
       timeout: 5s
@@ -52,7 +59,9 @@ services:
     ports:
       - "8081:8081" # 宿主 8081 -> 容器 8081（要与 application.yml 的 server.port 一致）
     environment:
-      SPRING_DATASOURCE_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123456}
+      # 业务账号 + 密码：与 user-db 中创建的账号一致
+      DB_USER: ${USER_DB_USER:-user_app}
+      SPRING_DATASOURCE_PASSWORD: ${USER_DB_PASSWORD:-user_app_pwd}
       DB_HOST: user-db
       NACOS_SERVER_ADDR: ${NACOS_SERVER_ADDR:-nacos:8848}
       NACOS_USERNAME: ${NACOS_USERNAME:-nacos}
@@ -72,7 +81,8 @@ services:
     ports:
       - "8082:8082" # 宿主 8082 -> 容器 8082（要与 application.yml 的 server.port 一致）
     environment:
-      SPRING_DATASOURCE_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123456}
+      DB_USER: ${LOST_DB_USER:-lost_app}
+      SPRING_DATASOURCE_PASSWORD: ${LOST_DB_PASSWORD:-lost_app_pwd}
       DB_HOST: lost-db
       NACOS_SERVER_ADDR: ${NACOS_SERVER_ADDR:-nacos:8848}
       NACOS_USERNAME: ${NACOS_USERNAME:-nacos}
@@ -95,7 +105,8 @@ services:
     ports:
       - "8083:8083" # 宿主 8083 -> 容器 8083（要与 application.yml 的 server.port 一致）
     environment:
-      SPRING_DATASOURCE_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123456}
+      DB_USER: ${ADMIN_DB_USER:-admin_app}
+      SPRING_DATASOURCE_PASSWORD: ${ADMIN_DB_PASSWORD:-admin_app_pwd}
       DB_HOST: admin-db
       NACOS_SERVER_ADDR: ${NACOS_SERVER_ADDR:-nacos:8848}
       NACOS_USERNAME: ${NACOS_USERNAME:-nacos}

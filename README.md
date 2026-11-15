@@ -102,8 +102,8 @@
 
 ### 1.环境要求
 
-- Java：17
-- Maven：3.8+
+- Java：25
+- Maven：3.8+（建议直接用仓库自带的 `./mvnw`，版本锁定为 3.9.16）
 
 ### 2.启动命令：
 
@@ -117,7 +117,7 @@ mvn spring-boot:run
 
 ### 4.接口地址
 
-问候接口：http://127.0.0.1:8080/hello
+问候接口：http://127.0.0.1:8080/api/hello
 
 健康检查接口：<http://127.0.0.1:8080/actuator/health>
 
@@ -131,18 +131,34 @@ mvn spring-boot:run
 
 ### 1. 数据库配置
 ### 本地 MySQL 配置说明
-本项目未使用 Docker Compose，需本地安装 MySQL 8.0+ 版本。
+第四周版本的单体应用使用本地 MySQL 8.0+（容器编排从第五周起引入）。
 1. 确保本地 MySQL 服务已启动。
-2. 在 `application.yml` 中配置正确的用户名和密码。
+2. 真实密码通过环境变量 `SPRING_DATASOURCE_PASSWORD` 注入，不要写进仓库；也可在 `monolith/src/main/resources/application.yaml` 中临时填写本地值（切勿提交）。
 3. 项目配置了 `createDatabaseIfNotExist=true`，启动时会自动创建 `lostfound_db` 数据库并自动建表，无需手动执行建表 SQL。
+4. `src/main/resources/data.sql` 准备了初始用户数据，通过 `spring.sql.init.mode: always` 在每次启动时执行（`INSERT IGNORE`，可重复执行）。
 
 ### 2. cURL 测试示例
-**创建失物（正常）：**
+
+**① 创建失物（正常，返回 200）：**
 
 ```bash
-curl -X POST http://localhost:8080/api/lost-items \
+curl -i -X POST http://localhost:8080/api/lost-items \
 -H "Content-Type: application/json" \
 -d '{"userId": 1, "itemName": "水杯", "feature": "底部有贴纸"}'
+```
+
+**② 查询失物列表（返回 200 与 JSON 数组）：**
+
+```bash
+curl -i http://localhost:8080/api/lost-items
+```
+
+**③ 特征为纯空格（返回 400，用于验证业务规则拦截）：**
+
+```bash
+curl -i -X POST http://localhost:8080/api/lost-items \
+-H "Content-Type: application/json" \
+-d '{"userId": 1, "itemName": "校园卡", "feature": "   "}'
 ```
 
 #    第五周：Docker 部署说明
@@ -165,12 +181,27 @@ curl http://localhost:8080/actuator/health
 
 由于项目已拆分为多个独立的微服务模块，运行测试需要分别进入对应的服务目录执行。
 
-### 1. 用户服务 (user-service) 测试
-进入 `services/user-service` 目录后执行：
+### 1. 三个服务的测试命令
+
 ```bash
-cd services/user-service
-./mvnw test
+cd services/user-service  && ./mvnw test    # 6 个用例
+cd services/lost-service  && ./mvnw test    # 5 个用例
+cd services/admin-service && ./mvnw test    # 7 个用例
 ```
+
+测试通过 `@SpringBootTest(properties=...)` 关闭 Nacos 注册并切换 H2 内存库，不依赖真实 MySQL 与注册中心。
+
+### 2. 独立数据库与独立账号
+
+| 服务 | 数据库 | 业务账号（compose 创建，只授权本库） | 环境变量 |
+|---|---|---|---|
+| user-service | `user_db` | `user_app` | `USER_DB_USER` / `USER_DB_PASSWORD` |
+| lost-service | `lost_db` | `lost_app` | `LOST_DB_USER` / `LOST_DB_PASSWORD` |
+| admin-service | `admin_db` | `admin_app` | `ADMIN_DB_USER` / `ADMIN_DB_PASSWORD` |
+
+* 服务通过 `DB_USER` 与 `SPRING_DATASOURCE_PASSWORD` 注入账号密码，`root` 只用于容器初始化与运维排障。
+* 本地不用 Docker 时，`DB_USER` 未设置会退回 `root`，方便单机调试。
+* 各服务只读写自己的库，跨服务仅保存对方 ID，不建外键、不直连对方的表。
 
 # 第七周：Nacos 部署与服务注册
 
