@@ -53,11 +53,12 @@ services:
       retries: 5
 
   # =========== 微服务 ===========
+  # 用户服务公共配置：两个实例共用，注册到同一个服务名 user-service
   user-service:
     build:
       context: ./services/user-service
     ports:
-      - "8081:8081" # 宿主 8081 -> 容器 8081（要与 application.yml 的 server.port 一致）
+      - "8081:8081" # 实例 A：宿主 8081 -> 容器 8081
     environment:
       # 业务账号 + 密码：与 user-db 中创建的账号一致
       DB_USER: ${USER_DB_USER:-user_app}
@@ -67,6 +68,31 @@ services:
       NACOS_USERNAME: ${NACOS_USERNAME:-nacos}
       NACOS_PASSWORD: ${NACOS_PASSWORD}
       NACOS_GROUP: ${NACOS_GROUP:-ZCL_GROUP}
+      # 实例标识：日志里用它可以看清负载均衡分到了哪个实例
+      INSTANCE_ID: user-service-1
+    depends_on:
+      nacos:
+        condition: service_started
+      user-db:
+        condition: service_healthy
+    networks:
+      - micro-net
+
+  # 用户服务实例 B：与实例 A 同一镜像、同一个服务名，但换一个宿主机端口，避免端口冲突
+  user-service-b:
+    build:
+      context: ./services/user-service
+    ports:
+      - "18081:8081" # 实例 B：宿主 18081 -> 容器 8081
+    environment:
+      DB_USER: ${USER_DB_USER:-user_app}
+      SPRING_DATASOURCE_PASSWORD: ${USER_DB_PASSWORD:-user_app_pwd}
+      DB_HOST: user-db
+      NACOS_SERVER_ADDR: ${NACOS_SERVER_ADDR:-nacos:8848}
+      NACOS_USERNAME: ${NACOS_USERNAME:-nacos}
+      NACOS_PASSWORD: ${NACOS_PASSWORD}
+      NACOS_GROUP: ${NACOS_GROUP:-ZCL_GROUP}
+      INSTANCE_ID: user-service-b-1
     depends_on:
       nacos:
         condition: service_started

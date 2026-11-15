@@ -1,7 +1,7 @@
 # 第八周作业：服务间通信与负载均衡
 
-> 本周提交两项：① **选择一个跨服务业务流程**；② **使用 OpenFeign**。
-> 大作业实践（多实例部署 + 负载均衡验证 + `scripts/e2e-test.sh`）本周**不提交**。
+> 本周提交三项：① **选择一个跨服务业务流程**；② **使用 OpenFeign**；③ **负载均衡验证**。
+> 大作业实践中的端到端脚本（`scripts/e2e-test.sh`）本周**不提交**。
 
 ---
 
@@ -217,10 +217,74 @@ docker compose start user-service
 
 ---
 
-## 3. 本周未完成（大作业实践，另行提交）
+## 3. 负载均衡验证
+
+### 3.1 目标
+
+把被调用方 `user-service` 启动 **2 个实例**，验证 `lost-service` 经 Feign + LoadBalancer 的请求**真的分发到了两个实例**，而不是只在注册列表里看到两行。
+
+### 3.2 改动
+
+1. **`compose.yaml` 增加实例 B**：`user-service-b` 与 `user-service` 同一镜像、同一服务名，宿主端口用 `18081 → 8081`，实例 A 仍是 `8081 → 8081`，**两个实例不抢同一个宿主机端口**。
+2. **`user-service` 打实例标识**：`UserController` 每次查询都记日志 `instance=<INSTANCE_ID> 本实例第 <n> 次查询，userId=<id>`；`INSTANCE_ID` 由 compose 注入（`user-service-1` / `user-service-b-1`）。
+3. **调用方零改动**：`@FeignClient(name = "user-service")` 只认服务名，服务名下出现两个实例后，`RoundRobinLoadBalancer` 自动轮流分发。
+
+### 3.3 运行命令
+
+```bash
+# 启动两个实例（首次会构建镜像）
+docker compose up -d --build user-service user-service-b
+# 等约 20 秒让两个实例都注册到 Nacos，然后连发 6 次，全部经过 lost-service 的 Feign 调用
+for i in $(seq 1 6); do
+  curl -s -o /dev/null -w "$i: %{http_code}\n" \
+    -H "Content-Type: application/json" \
+    -d '{"itemName":"黑色折叠伞","feature":"伞柄贴有蓝色标签","userId":1}' \
+    http://localhost:8082/api/lost-items
+done
+# 查看两个实例的日志（用起始时间过滤）
+docker compose logs --since "2026-11-15T16:54:00" --no-color user-service user-service-b | grep "instance="
+```
+
+> PowerShell 里 `for` 循环改 `1..6 | ForEach-Object { ... }`，JSON 建议写文件后 `--data-binary "@body.json"`。
+
+### 3.4 结果（2026-11-15 实测）
+
+6 次请求全部 **200**，两个实例各处理 **3 次**，交替出现：
+
+| 次序 | 实际实例 |
+|---|---|
+| 1 | `user-service-b-1` |
+| 2 | `user-service-1` |
+| 3 | `user-service-b-1` |
+| 4 | `user-service-1` |
+| 5 | `user-service-b-1` |
+| 6 | `user-service-1` |
+
+日志原文（节选）：
+
+```text
+user-service-b-1 | instance=user-service-b-1 本实例第 1 次查询，userId=1
+user-service-1   | instance=user-service-1   本实例第 1 次查询，userId=1
+user-service-b-1 | instance=user-service-b-1 本实例第 2 次查询，userId=1
+user-service-1   | instance=user-service-1   本实例第 2 次查询，userId=1
+user-service-b-1 | instance=user-service-b-1 本实例第 3 次查询，userId=1
+user-service-1   | instance=user-service-1   本实例第 3 次查询，userId=1
+```
+
+补充验证：`docker compose stop user-service-b` 后再发 3 次，**全部 200**，日志只出现在 `user-service-1`（第 4、5、6 次），说明单实例下线后调用方自动切到存活实例，无需改代码、无需重启。
+
+### 3.5 结论
+
+- 负载均衡确实生效：同一服务名下两个实例，请求 3/3 交替；不是“注册列表里有两行”这种伪验证；
+- 实例标识可直接核对：宿主机 `8081` 对应实例 A、`18081` 对应实例 B，配合日志里的 `instance=` 双向印证；
+- 水平扩容对调用方透明：调用方只写服务名，加实例只要在 `compose.yaml` 里加一份配置；
+- 两个实例共用同一个 `user_db`，属于无状态读服务，扩副本不需要改数据层。
+
+---
+
+## 4. 本周未完成（另行提交）
 
 | 项 | 状态 |
 |---|---|
-| 多实例部署（同一服务 ≥2 副本） | 未做 |
-| 负载均衡验证（多次请求落到不同实例） | 未做 |
-| `scripts/e2e-test.sh`（可重复验证脚本） | 未做 |
+| `scripts/e2e-test.sh`（可重复的端到端验证脚本） | 未做 |
+| 多实例启动的自动化（`--scale` 或 replicas 编排） | 未做，当前用 `user-service` + `user-service-b` 两条显式实例配置 |
