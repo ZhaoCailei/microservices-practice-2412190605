@@ -12,6 +12,13 @@ spring:
         password: "${NACOS_PASSWORD:}"
         group: ${NACOS_GROUP:ZCL_GROUP}
         register-enabled: true
+    # OpenFeign：声明式调用，超时与失败处理在此配置
+    openfeign:
+      client:
+        config:
+          default:
+            connect-timeout: 3000
+            read-timeout: 3000
   datasource:
     # 本机跑用 localhost；docker compose 里通过 DB_HOST=lost-db 覆盖
     url: jdbc:mysql://${DB_HOST:localhost}:3306/lost_db?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&createDatabaseIfNotExist=true

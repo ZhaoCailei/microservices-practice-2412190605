@@ -1,26 +1,24 @@
 package com.zjgsu.zcl.lost.client;
 
-import org.springframework.cloud.client.ServiceInstance;
-import org.springframework.cloud.client.discovery.DiscoveryClient;
+import feign.FeignException;
 import org.springframework.stereotype.Component;
-import org.springframework.web.client.HttpClientErrorException;
-import org.springframework.web.client.RestClientException;
-import org.springframework.web.client.RestTemplate;
-import org.springframework.web.util.UriComponentsBuilder;
 
-import java.net.URI;
-import java.util.List;
 import java.util.Map;
 
 /**
- * 通过 Nacos 服务发现获取 user-service 的实例地址，再调用其原有业务接口 GET /api/users/{id}。
+ * 跨服务调用的门面：对上层只暴露 {@link #checkUserExists(Long)}，内部用 OpenFeign 声明式客户端。
  *
- * <p>要点：
+ * <p>与第七周手工寻址（DiscoveryClient + RestTemplate 自己拼 URI）相比：
  * <ul>
- *   <li>每次调用都向 {@link DiscoveryClient} 取“当前已知实例”，不在启动时缓存地址；</li>
- *   <li>实例列表为空说明依赖服务不可用，抛 {@link UserServiceUnavailableException}，由控制器返回 503；</li>
- *   <li>对方返回 404（用户不存在）属于正常业务结果，返回 false，保留原有业务响应；</li>
- *   <li>连接失败 / 超时 / 5xx 同样视为依赖不可用。</li>
+ *   <li>地址解析交给 Feign + LoadBalancer，代码里只写服务名；</li>
+ *   <li>失败处理仍然集中在这里，不把 FeignException 泄漏给业务层。</li>
+ * </ul>
+ *
+ * <p>失败语义：
+ * <ul>
+ *   <li>404（用户不存在）→ 返回 false，交给上层按原有业务语义返回 400；</li>
+ *   <li>其他 FeignException（5xx、解码失败、请求构造失败）→ {@link UserServiceUnavailableException}，由控制器返回 503；</li>
+ *   <li>负载均衡器找不到实例、连接超时等运行时异常 → 同样返回 503。</li>
  * </ul>
  */
 @Component
@@ -32,42 +30,32 @@ public class UserClient {
     /** user-service 原有的业务路径 */
     public static final String USER_PATH = "/api/users/{id}";
 
-    private final RestTemplate restTemplate;
+    private final UserServiceClient userServiceClient;
 
-    private final DiscoveryClient discoveryClient;
-
-    public UserClient(RestTemplate restTemplate, DiscoveryClient discoveryClient) {
-        this.restTemplate = restTemplate;
-        this.discoveryClient = discoveryClient;
+    public UserClient(UserServiceClient userServiceClient) {
+        this.userServiceClient = userServiceClient;
     }
 
     /**
-     * 校验用户是否存在：本次请求实时解析实例地址，只选第一个实例（本周不要求轮询/权重/重试）。
+     * 校验用户是否存在。本次请求由 LoadBalancer 实时选实例，只取一个（本周不要求轮询/权重/重试）。
      */
     public boolean checkUserExists(Long userId) {
-        List<ServiceInstance> instances = discoveryClient.getInstances(USER_SERVICE_NAME);
-        if (instances == null || instances.isEmpty()) {
-            throw new UserServiceUnavailableException(
-                    "no available instance of service '" + USER_SERVICE_NAME + "'", null);
-        }
-
-        ServiceInstance instance = instances.get(0);
-        URI uri = UriComponentsBuilder.fromUri(instance.getUri())
-                .path(USER_PATH)
-                .buildAndExpand(userId)
-                .encode()
-                .toUri();
-
         try {
-            Map<?, ?> response = restTemplate.getForObject(uri, Map.class);
-            return response != null && response.containsKey("id");
-        } catch (HttpClientErrorException.NotFound e) {
-            // 用户不存在：保留原有业务语义（由上层返回原有的 400 业务响应），不算依赖不可用
+            Map<String, Object> user = userServiceClient.findById(userId);
+            return user != null && user.get("id") != null;
+        } catch (FeignException.NotFound e) {
+            // 用户不存在：对方明确的业务答案，保留原有 400 语义，不算依赖不可用
             return false;
-        } catch (RestClientException e) {
-            // 连不上、超时、对方 5xx 等：基础设施层面故障
+        } catch (FeignException e) {
+            // status > 0：对方返回了非 2xx；status <= 0：Feign 在通信阶段失败（无实例、连接被拒、超时）
+            throw new UserServiceUnavailableException("调用 " + USER_SERVICE_NAME + " 失败："
+                    + (e.status() > 0
+                    ? "对方返回 HTTP " + e.status()
+                    : "无法连接到 " + USER_SERVICE_NAME + "（注册中心无可用实例、连接失败或超时）"), e);
+        } catch (RuntimeException e) {
+            // 负载均衡器没有可用实例、连接/读取超时等
             throw new UserServiceUnavailableException(
-                    "call " + USER_SERVICE_NAME + " failed: " + e.getMessage(), e);
+                    "调用 " + USER_SERVICE_NAME + " 失败：" + e.getMessage(), e);
         }
     }
 }

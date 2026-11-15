@@ -1,111 +1,226 @@
 # 第八周作业：服务间通信与负载均衡
 
-> 本周作业分两部分：
-> ① **选择一个跨服务业务流程**（已提交，见下）；
-> ② 大作业实践：OpenFeign + 多实例负载均衡 + `scripts/e2e-test.sh`（**本周暂不提交**）。
+> 本周提交两项：① **选择一个跨服务业务流程**；② **使用 OpenFeign**。
+> 大作业实践（多实例部署 + 负载均衡验证 + `scripts/e2e-test.sh`）本周**不提交**。
+
+---
 
 ## 1. 选择一个跨服务业务流程
+
+### 1.1 流程与理由
 
 **流程：发布失物前校验发布者是否存在。**
 
 一个用户发失物帖时，`lost-service` 必须先确认这个 `userId` 真的存在，而用户数据归 `user-service`、失物数据归 `lost-service`，两个服务各有一个私有库（`user_db` / `lost_db`），无法用 SQL 直接关联，所以这条链路**必须跨服务完成**。
 
+### 1.2 调用链路图
+
 ```text
 [客户端]
    │  POST /api/lost-items   {"itemName","feature","userId":1}
    ▼
-[lost-service :8082]
-   │ ① getInstances("user-service")  ──▶ [Nacos · public / ZCL_GROUP] ──▶ 实例列表 [172.x.x.x:8081]
-   │ ② GET /api/users/1（实例 URI + 原业务路径，超时 3s） ──▶ [user-service :8081] ──▶ [user_db.users]
-   │      200 → 校验通过     404 → 返回 400，不写库     实例为空/超时 → 返回 503，不写库
+[lost-service :8082]  LostItemController → LostItemService（@Transactional）
+   │ ① 调用前由 LoadBalancer 从 Nacos（public / ZCL_GROUP）取 user-service 实例
+   │ ② Feign 用服务名发出：GET http://<实例IP>:8081/api/users/{id}（超时 3s）
+   │      200 → 用户存在，继续      404 → 返回 400，不写库
+   │      无实例 / 超时 / 5xx → 返回 503，不写库
    │ ③ 校验通过才 INSERT
    ▼
-[lost_db.lost_items] ──▶ [客户端] 200 发布成功，失物ID：n
+[lost_db · lost_items] ──▶ [客户端] 200 发布成功，失物ID：n
 ```
 
-## 2. 实现思路
+完整版见 [`docs/service-communication.md`](../../service-communication.md)。
 
-1. **寻址**：`UserClient` 每次调用先 `discoveryClient.getInstances("user-service")`，再 `UriComponentsBuilder.fromUri(instance.getUri()).path("/api/users/{id}")`，拼出真实地址后才发 HTTP。
-2. **不缓存地址**：类里没有实例缓存字段，服务上下线、换 IP 都能立即感知。
-3. **超时**：`RestTemplateConfig` 设置连接 3 秒、读取 3 秒。
-4. **错误语义**：
-   - 远端 `404` → 用户不存在 → 本服务返回 **400**，不写库；
-   - 实例列表为空 / 超时 / 5xx → **503**，不写库；
-   - 远端 `200` → 返回 `true`，继续发布。
-5. **事务边界**：校验在 `entityManager.persist()` 之前，方法整体在 `@Transactional` 内，失败不会留下半条数据。
-6. **数据边界**：`lost_items` 只保存 `user_id`，不建跨库外键，不直连 `user_db`。
+### 1.3 调用方、被调用方与接口路径
 
-涉及文件：
+| 角色 | 服务 | 接口路径 | 说明 |
+|---|---|---|---|
+| 调用方 | `lost-service` :8082 | `POST /api/lost-items` | 对外入口，请求体含 `itemName`、`feature`、`userId` |
+| 被调用方 | `user-service` :8081 | `GET /api/users/{id}` | 存在 200 + 用户 JSON，不存在 404 |
+| 注册中心 | Nacos | — | 服务名 `user-service`，命名空间 `public`，分组 `ZCL_GROUP` |
 
-| 文件 | 作用 |
-|---|---|
-| `services/lost-service/.../client/UserClient.java` | 发现实例并调用 `GET /api/users/{id}` |
-| `services/lost-service/.../client/UserServiceUnavailableException.java` | 依赖不可用异常，映射 503 |
-| `services/lost-service/.../config/RestTemplateConfig.java` | `RestTemplate` 与 3 秒超时 |
-| `services/lost-service/.../service/LostItemService.java` | 先校验后 `persist` |
-| `services/lost-service/.../controller/LostItemController.java` | 200 / 400 / 503 三态映射 |
-| `services/user-service/.../controller/UserController.java` | 被调用方，存在 200、不存在 404 |
+### 1.4 实现思路
 
-## 3. 运行命令
+1. **寻址**：`UserServiceClient` 上用 `@FeignClient(name = "user-service", path = "/api/users")`，代码里只有服务名，没有任何 IP/端口；由 LoadBalancer 从 Nacos 取实例。
+2. **调用**：`UserClient.checkUserExists(userId)` 调 `findById(userId)`，返回非空且含 `id` 即视为存在。
+3. **失败处理**：见第 2 节，404 与“依赖不可用”分开处理。
+4. **事务边界**：校验在 `entityManager.persist()` 之前，方法整体在 `@Transactional` 内。
+5. **数据边界**：`lost_items` 只存 `user_id`，不建跨库外键，不直连 `user_db`。
+
+### 1.5 运行命令
 
 ```bash
-# 启动 7 个容器（3 库 + 3 服务 + Nacos）
 docker compose up -d
-docker compose ps
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8081/api/users/1
 
-# ① 被调用方可用
-curl -s -o /dev/null -w "user-service: %{http_code}\n" http://localhost:8081/api/users/1
-
-# ② 正常发布
+# 正常发布
 curl -s -w "\nHTTP %{http_code}\n" -H "Content-Type: application/json" \
   -d '{"itemName":"黑色折叠伞","feature":"伞柄贴有蓝色标签","userId":1}' \
   http://localhost:8082/api/lost-items
 
-# ③ 用户不存在
+# 用户不存在
 curl -s -w "\nHTTP %{http_code}\n" -H "Content-Type: application/json" \
   -d '{"itemName":"测试失物","feature":"不存在用户","userId":9999}' \
   http://localhost:8082/api/lost-items
 
-# ④ 依赖不可用：先停掉 user-service，等 3 秒再发
-docker compose stop user-service && sleep 3
-curl -s -w "\nHTTP %{http_code}\n" -H "Content-Type: application/json" \
-  -d '{"itemName":"黑色折叠伞","feature":"伞柄贴有蓝色标签","userId":1}' \
-  http://localhost:8082/api/lost-items
-
-# ⑤ 确认失败期间没有写库
-docker compose exec -T lost-db mysql -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" -N lost_db \
-  -e "SELECT COUNT(*) FROM lost_items;"
-
-# ⑥ 恢复后再次发布
-docker compose start user-service && sleep 12
+# 依赖不可用
+docker compose stop user-service && sleep 4
 curl -s -w "\nHTTP %{http_code}\n" -H "Content-Type: application/json" \
   -d '{"itemName":"黑色折叠伞","feature":"伞柄贴有蓝色标签","userId":1}' \
   http://localhost:8082/api/lost-items
 ```
 
-> PowerShell 下 `-d '{...}'` 的单引号会被吞掉，导致服务端收到空 JSON、返回笼统的 400；把请求体写进文件再用 `--data-binary "@body.json"` 即可。
+> PowerShell 下内联 JSON 的引号会被吞掉，先写文件再用 `--data-binary "@body.json"`。
 
-## 4. 运行结果（2026-11-15 实测）
+### 1.6 运行结果（2026-11-15 实测）
 
-| 步骤 | 请求 | 状态码 | 返回 |
+| # | 场景 | 状态码 | 返回 |
 |---|---|---|---|
-| ① | `GET /api/users/1` | 200 | 用户 JSON |
-| ② | `POST /api/lost-items`（`userId=1`） | 200 | `发布成功，失物ID：3` |
-| ③ | 同上（`userId=9999`） | 400 | `发布失败：用户不存在或用户服务不可用（校验未通过）` |
-| ④ | 停服 3 秒后再发 | 503 | `依赖服务不可用：no available instance of service 'user-service'` |
-| ⑤ | 停服期间统计行数 | — | 3 → 3，**未写入** |
-| ⑥ | 重启后发布 | 200 | `发布成功，失物ID：4`，行数 3 → 4 |
+| 1 | 正常发布（`userId=1`） | 200 | `发布成功，失物ID：6` |
+| 2 | 用户不存在（`userId=9999`） | 400 | `发布失败：用户 9999 不存在，无法发布失物` |
+| 3 | 停掉 `user-service` 后再发 | 503 | `依赖服务不可用：调用 user-service 失败：无法连接到 user-service（注册中心无可用实例、连接失败或超时）` |
+| 4 | 停服期间统计 `lost_items` | — | 6 行 → 6 行，**未写入** |
+| 5 | 重启 `user-service` 后再发 | 200 | `发布成功，失物ID：7`，行数 6 → 7 |
 
-补充观测：`user-service` 容器启动后约 **9.3 秒**健康接口才 `UP`，但此时实例尚未在 Nacos 注册完成，紧接着一次请求仍是 **503**，下一次请求（约 0.2 秒后）才变成 200 —— **健康检查通过不等于已可被发现**。
+补充：`lost-service` 容器重建后健康接口约 10.6 秒 `UP`；`user-service` 重启后约 9.8 秒恢复到可调用。**健康检查通过不等于已在注册中心可被发现**。
 
-对应截图（第七周实测，同一链路）：`docs/homework/week-07/screenshots/flow-success.png`、`flow-503.png`、`flow-recovered.png`。
+### 1.7 关键结论
 
-## 5. 关键结论
+- 404 是业务答案（400，不写库），实例为空/超时是基础设施故障（503，不写库），两者必须分开；
+- 依赖不可用时应拒绝发布，而不是跳过校验写库；
+- 服务发现的价值是调用时实时选实例，写死 `http://user-service:8081` 只是用了 Compose 的 DNS。
 
-1. 只在调用前查注册中心拿实例 URI，才算真正的服务发现；写死 `http://user-service:8081` 只是用了 Compose 的 DNS。
-2. `404` 与“实例列表为空”必须区分：前者是业务答案（400），后者是基础设施故障（503）。
-3. 依赖不可用时正确做法是拒绝发布（503），而不是跳过校验写库，否则脏数据会长期留存。
-4. 注册存在延迟，重启窗口内出现 503 属预期。
-5. 本周只取第 1 个实例，未做轮询、权重、重试、熔断。
+---
 
-## 
+## 2. 使用 OpenFeign
+
+### 2.1 依赖
+
+`services/lost-service/pom.xml`，两个依赖，版本全部由 BOM 管理（不写 version）：
+
+```xml
+<dependency>
+  <groupId>org.springframework.cloud</groupId>
+  <artifactId>spring-cloud-starter-openfeign</artifactId>
+</dependency>
+<dependency>
+  <groupId>org.springframework.cloud</groupId>
+  <artifactId>spring-cloud-starter-loadbalancer</artifactId>
+</dependency>
+```
+
+启动类加注解：`@EnableFeignClients`。
+
+### 2.2 客户端：只用服务名
+
+`services/lost-service/src/main/java/com/zjgsu/zcl/lost/client/UserServiceClient.java`
+
+```java
+@FeignClient(name = UserClient.USER_SERVICE_NAME, path = UserServiceClient.BASE_PATH)
+public interface UserServiceClient {
+
+    String BASE_PATH = "/api/users";
+
+    @GetMapping("/{id}")
+    Map<String, Object> findById(@PathVariable("id") Long id);
+}
+```
+
+- `name = "user-service"` 是**服务名**，不是容器 IP / 端口；
+- `path` + `@GetMapping("/{id}")` 拼成 `GET /api/users/{id}`，与 user-service 原有接口一致；
+- 实际目标地址由 `spring-cloud-starter-loadbalancer` 从 Nacos 实例列表中选，本次只有一个实例。
+
+### 2.3 调用逻辑与失败处理
+
+`services/lost-service/src/main/java/com/zjgsu/zcl/lost/client/UserClient.java`
+
+```java
+public boolean checkUserExists(Long userId) {
+    try {
+        Map<String, Object> user = userServiceClient.findById(userId);
+        return user != null && user.get("id") != null;
+    } catch (FeignException.NotFound e) {
+        return false;                       // 用户不存在：业务答案
+    } catch (FeignException e) {
+        throw new UserServiceUnavailableException("调用 user-service 失败："
+                + (e.status() > 0
+                ? "对方返回 HTTP " + e.status()
+                : "无法连接到 user-service（注册中心无可用实例、连接失败或超时）"), e);
+    } catch (RuntimeException e) {          // LoadBalancer 无实例、超时等
+        throw new UserServiceUnavailableException("调用 user-service 失败：" + e.getMessage(), e);
+    }
+}
+```
+
+三种结果对应控制器三种响应：
+
+| 情况 | 异常 | 响应 |
+|---|---|---|
+| 用户存在 | 无 | 200 `发布成功，失物ID：n` |
+| 用户不存在 | `FeignException.NotFound` | 400 `发布失败：用户 x 不存在` |
+| 依赖不可用 | `UserServiceUnavailableException` | 503 `依赖服务不可用：调用 user-service 失败：…` |
+
+超时配置（`application.yml`）：
+
+```yaml
+spring:
+  cloud:
+    openfeign:
+      client:
+        config:
+          default:
+            connect-timeout: 3000
+            read-timeout: 3000
+```
+
+### 2.4 与第七周的差别
+
+| 项 | 第七周（手工寻址） | 第八周（OpenFeign） |
+|---|---|---|
+| 地址来源 | `DiscoveryClient.getInstances()` 手写，自己拼 URI | `@FeignClient(name = "user-service")`，LoadBalancer 自动选实例 |
+| 代码里的地址 | 代码中出现 URI 拼接 | 只有服务名与路径注解 |
+| 超时 | `RestTemplate` 工厂设置 | `spring.cloud.openfeign` 配置 |
+| 失败处理 | `catch RestClientException` / `HttpClientErrorException` | `catch FeignException` / `RuntimeException` |
+| 已删除 | — | `RestTemplateConfig`、`DiscoveryClient` 手工寻址代码 |
+
+### 2.5 验证方法
+
+```bash
+# 1) 单元测试：4 个场景（存在 / 404 / 对方 5xx / 无实例），不连真实 Nacos
+cd services/lost-service && ./mvnw test
+
+# 2) 正常调用
+curl -s -w "\nHTTP %{http_code}\n" -H "Content-Type: application/json" \
+  -d '{"itemName":"黑色折叠伞","feature":"伞柄贴有蓝色标签","userId":1}' \
+  http://localhost:8082/api/lost-items
+
+# 3) 失败处理：停掉被调用方，应返回 503 与可读错误
+docker compose stop user-service && sleep 4
+curl -s -w "\nHTTP %{http_code}\n" -H "Content-Type: application/json" \
+  -d '{"itemName":"黑色折叠伞","feature":"伞柄贴有蓝色标签","userId":1}' \
+  http://localhost:8082/api/lost-items
+
+# 4) 恢复
+docker compose start user-service
+```
+
+### 2.6 结果
+
+- `./mvnw test`：**Tests run: 5, Failures: 0, Errors: 0**（`UserClientTest` 4 个 + 上下文 1 个）；
+- 正常调用：**200**，`发布成功，失物ID：6`；
+- 停掉 `user-service`：**503**，`依赖服务不可用：调用 user-service 失败：无法连接到 user-service（注册中心无可用实例、连接失败或超时）`；
+- 停服期间 `lost_items` 行数不变（6 → 6），未写库；
+- 重启后：**200**，`发布成功，失物ID：7`，行数 6 → 7；
+- 冒烟脚本 `scripts/smoke-test.sh`：4 项全部 PASS。
+
+截图见 [`screenshots/`](screenshots/)。
+
+---
+
+## 3. 本周未完成（大作业实践，另行提交）
+
+| 项 | 状态 |
+|---|---|
+| 多实例部署（同一服务 ≥2 副本） | 未做 |
+| 负载均衡验证（多次请求落到不同实例） | 未做 |
+| `scripts/e2e-test.sh`（可重复验证脚本） | 未做 |

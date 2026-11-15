@@ -23,7 +23,8 @@ public class LostItemService {
     public LostItem createLostItem(LostItem item) {
         // 严格校验：如果依赖服务不可用或用户不存在，直接抛异常中断，不写库
         if (!userClient.checkUserExists(item.getUserId())) {
-            throw new IllegalArgumentException("发布失败：用户不存在或用户服务不可用（校验未通过）");
+            throw new IllegalArgumentException(
+                    "发布失败：用户 " + item.getUserId() + " 不存在，无法发布失物");
         }
 
         entityManager.persist(item);
