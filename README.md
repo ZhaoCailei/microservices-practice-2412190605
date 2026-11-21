@@ -255,16 +255,17 @@ docker compose logs user-service lost-service admin-service | grep "register fin
 
 1. 浏览器打开控制台 <http://localhost:18080>（映射的是容器 8080，不是旧版 `8848/nacos` 地址）；
 2. 用 `nacos` 账号登录（密码见本机 `.env` 的 `NACOS_PASSWORD`）；
-3. 左侧「服务管理 → 服务列表」，命名空间选 `public`，即可看到 3 个服务、分组 `ZCL_GROUP`、实例数均为 1；
+3. 左侧「服务管理 → 服务列表」，命名空间选 `public`，即可看到 3 个服务、分组 `ZCL_GROUP`；`user-service` 下有 **2 个实例**（`user-service` 与 `user-service-b`），其余服务各 1 个；
 4. 点开某个服务详情，可看到实例 IP、端口、健康状态与是否临时实例。
 
 | 服务名 | 分组 | 实例 IP:端口 | 健康状态 |
 | --- | --- | --- | --- |
-| user-service | ZCL_GROUP | 172.19.0.5:8081 | 健康 |
+| user-service | ZCL_GROUP | 172.19.0.5:8081（实例 A，宿主 8081） | 健康 |
+| user-service | ZCL_GROUP | 另一容器 IP:8081（实例 B，宿主 18081） | 健康 |
 | lost-service | ZCL_GROUP | 172.19.0.7:8082 | 健康 |
 | admin-service | ZCL_GROUP | 172.19.0.6:8083 | 健康 |
 
-> 实例 IP 是容器在 `micro-net` 网络中的地址，与宿主机发布的 8081 / 8082 / 8083 一一对应。
+> 实例 IP 是容器在 `micro-net` 网络中的地址；`user-service` 的两个实例容器内端口都是 8081，只有宿主机映射端口不同（8081 / 18081）。
 
 ### 6. 注册相关配置要点
 
@@ -287,35 +288,13 @@ spring:
 *   容器内访问 Nacos 必须用服务名 `nacos:8848`，不能写 `localhost`；本机直接运行服务时可用 `NACOS_SERVER_ADDR=localhost:8848` 覆盖。
 *   版本由 BOM 统一管理：Spring Cloud `2025.1.4` + Spring Cloud Alibaba `2025.1.0.0`（与 Spring Boot 4.1.2 匹配）。各服务只声明 `spring-cloud-starter-alibaba-nacos-discovery`，**不单独覆盖 nacos-client 版本**；本周**未引入** Config Starter。
 
-### 7. 服务发现与业务调用（发布失物前校验用户）
+### 7. 服务发现与业务调用（第七周：DiscoveryClient 手工寻址）
 
-`lost-service` 发布失物（`POST /api/lost-items`）时，需要先调用 `user-service` 的 `GET /api/users/{id}` 校验用户是否存在。该调用**不再使用固定地址**，而是每次请求都通过 `DiscoveryClient` 实时解析实例：
+第七周的实现是：每次请求都用 `DiscoveryClient.getInstances("user-service")` 取实例列表，自己拼出 `http://<实例IP>:8081/api/users/{id}`，再用 `RestTemplate` 调用；实例列表为空或连接失败时返回 503。
 
-```java
-List<ServiceInstance> instances = discoveryClient.getInstances("user-service");
-if (instances.isEmpty()) {
-    throw new UserServiceUnavailableException(...);   // 控制器 -> 503
-}
-URI uri = instance.getUri() + "/api/users/" + userId; // 用发现的地址 + 原业务路径
-```
+**第八周已整体替换为 OpenFeign**：调用方代码里只写服务名，寻址与实例选择交给 LoadBalancer；失败处理、JSON 响应契约与负载均衡验证见文末 **《第八周：OpenFeign 跨服务调用与负载均衡验证》**。
 
-行为约定：
-
-| 情况 | 返回 |
-| --- | --- |
-| 用户存在 | `200`，发布成功 |
-| 用户不存在（user-service 返回 404） | `400`，保留原有业务响应，不写库 |
-| Nacos 中 `user-service` 实例列表为空 / 连接失败 / 超时 | `503`，依赖服务不可用，不写库 |
-
-试用：
-
-```bash
-curl -i -X POST http://localhost:8082/api/lost-items \
-  -H 'Content-Type: application/json' \
-  -d '{"itemName":"校园卡","feature":"蓝色卡套","userId":1}'
-```
-
-验证依赖下线/恢复：`docker compose stop user-service` 后再次请求会得到 503，`docker compose start user-service` 后（约十几秒重新注册）自动恢复为 200。
+> 本章余下内容（§8 测试命令、§9 冒烟脚本、§10 健康与依赖下线验证）仍然适用于当前代码。
 
 ### 8. 各服务测试命令
 
@@ -329,7 +308,7 @@ cd services/admin-service && ./mvnw test
 
 > Windows PowerShell 里不能写 `./mvnw`（PowerShell 要求带扩展名，且 `scripts/` 目录下没有 wrapper），请先进到服务目录再执行 `.\mvnw.cmd test`；Git Bash 里则用 `bash mvnw test`。
 
-> 测试**不依赖真实 MySQL 与 Nacos**：测试类中关闭了 Nacos 发现与自动注册（`spring.cloud.nacos.discovery.enabled=false`、`register-enabled=false`、`service-registry.auto-registration.enabled=false`），数据源切换为 H2 内存库（`com.h2database:h2`，test 作用域），下游 HTTP 用 `MockRestServiceServer` 模拟。`lost-service` 另有 4 个服务发现用例（空实例列表、按发现地址调用、404 保留业务响应、每次调用重新寻址）。
+> 测试**不依赖真实 MySQL 与 Nacos**：测试类中关闭了 Nacos 发现与自动注册（`spring.cloud.nacos.discovery.enabled=false`、`register-enabled=false`、`service-registry.auto-registration.enabled=false`），数据源切换为 H2 内存库（`com.h2database:h2`，test 作用域），下游 HTTP 用 Mockito 模拟 Feign 客户端（不再使用 `MockRestServiceServer`）。`lost-service` 另有 4 个 Feign 客户端用例（用户存在、404、对方 5xx、无可用实例）。
 
 ### 9. 冒烟脚本（在仓库根目录执行）
 
@@ -381,21 +360,278 @@ curl http://localhost:8083/actuator/health   # admin-service
 验证依赖下线与恢复（`lost-service` 调用 `user-service` 校验用户）：
 
 ```bash
-# ① 正常：成功并落库
+# ① 正常：成功并落库，返回 JSON
 curl -i -X POST http://localhost:8082/api/lost-items -H 'Content-Type: application/json' \
   -d '{"itemName":"umbrella","feature":"black","userId":1}'
 
-# ② 下线被调用方，观察 Nacos 实例数变为 0
-docker compose stop user-service
+# ② 下线被调用方全部实例（两个实例都要停，只停一个另一个仍会应答）
+docker compose stop user-service user-service-b
 
-# ③ 用新的有效参数请求：返回 503，且数据库不新增记录
+# ③ 用新的有效参数请求：返回 503 JSON，且数据库不新增记录
 curl -i -X POST http://localhost:8082/api/lost-items -H 'Content-Type: application/json' \
   -d '{"itemName":"umbrella-while-down","feature":"black","userId":1}'
 
 # ④ 恢复：等待重新注册后可再次成功
-docker compose start user-service
+docker compose start user-service user-service-b
 ```
 
 ⚠️ 注意：Actuator 的 `UP/DOWN` 是应用自身健康（`db`、`diskSpace`、`liveness/readiness`），**不会**自动影响 Nacos 注册状态；实例是否被摘除由 SDK 心跳/连接决定。
+
+---
+
+# 第八周：OpenFeign 跨服务调用与负载均衡验证
+
+本周把第七周的“手工寻址 + RestTemplate”整体换成 **OpenFeign 声明式客户端**，用两个 `user-service` 实例验证负载均衡，并把接口响应统一为 JSON、补了一层端到端自动化验证。
+
+## 1. 依赖与启动类
+
+`services/lost-service/pom.xml`（版本全部由 BOM 管理，不写 `version`）：
+
+```xml
+<dependency>
+  <groupId>org.springframework.cloud</groupId>
+  <artifactId>spring-cloud-starter-openfeign</artifactId>
+</dependency>
+<dependency>
+  <groupId>org.springframework.cloud</groupId>
+  <artifactId>spring-cloud-starter-loadbalancer</artifactId>
+</dependency>
+```
+
+`LostServiceApplication` 上加 `@EnableFeignClients`，扫描 `com.zjgsu.zcl.lost` 包下的 `@FeignClient` 接口。
+
+## 2. Feign 客户端：只写服务名
+
+`services/lost-service/src/main/java/com/zjgsu/zcl/lost/client/UserServiceClient.java`：
+
+```java
+@FeignClient(name = UserClient.USER_SERVICE_NAME, path = UserServiceClient.BASE_PATH)
+public interface UserServiceClient {
+    String BASE_PATH = "/api/users";
+
+    @GetMapping("/{id}")
+    Map<String, Object> findById(@PathVariable("id") Long id);
+}
+```
+
+*   `name = "user-service"` 是注册中心里的**服务名**，不是 IP、端口或容器名；
+*   `path` + `@GetMapping("/{id}")` 拼成 `GET /api/users/{id}`，与 `user-service` 原有接口一致；
+*   实际目标地址由 LoadBalancer 在**每次调用时**从 Nacos 实例列表中选一个；
+*   调用方代码里不出现任何 IP / 端口 / 容器地址。
+
+超时配置（`services/lost-service/src/main/resources/application.yml`）：
+
+```yaml
+spring:
+  cloud:
+    openfeign:
+      client:
+        config:
+          default:
+            connect-timeout: 3000
+            read-timeout: 3000
+```
+
+## 3. 失败处理：三分支 + JSON 响应
+
+`UserClient#checkUserExists` 把 Feign 异常翻译成业务语义，不把 `FeignException` 泄漏给 Service 层：
+
+```java
+try {
+    Map<String, Object> user = userServiceClient.findById(userId);
+    return user != null && user.get("id") != null;
+} catch (FeignException.NotFound e) {          // 404：对方明确的业务答案
+    return false;
+} catch (FeignException e) {                   // 对方 5xx / 响应解码失败
+    throw new UserServiceUnavailableException("调用 user-service 失败：" + ...);
+} catch (RuntimeException e) {                 // LoadBalancer 无实例、连接/读取超时
+    throw new UserServiceUnavailableException("调用 user-service 失败：" + e.getMessage(), e);
+}
+```
+
+`LostItemController` 三种结果统一返回 JSON（`Content-Type: application/json`）：
+
+| 场景 | 状态码 | 响应体 |
+| --- | --- | --- |
+| 发布成功 | `200` | `{"id": 51, "message": "发布成功"}` |
+| 用户不存在 | `400` | `{"error": "发布失败：用户 9999 不存在，无法发布失物"}` |
+| 实例为空 / 超时 / 5xx | `503` | `{"error": "依赖服务不可用：..."}` |
+
+*   成功带 `id`（新失物主键）与 `message`，字段顺序固定（`LinkedHashMap`）；
+*   失败统一用 `error` 字段，HTTP 状态码与语义对应：业务拒绝 400、依赖故障 503；
+*   三种情况都**不写库**：校验在 `entityManager.persist()` 之前，异常触发事务回滚。
+
+## 4. 负载均衡：两个实例
+
+`compose.yaml` 把 `user-service` 跑成两个实例，**同一镜像、同一服务名**：
+
+```yaml
+user-service:
+  ports:
+    - "8081:8081"        # 实例 A：宿主机 8081 → 容器 8081
+  environment:
+    INSTANCE_ID: user-service-1
+
+user-service-b:
+  # 同一镜像；spring.application.name 仍是 user-service
+  ports:
+    - "18081:8081"       # 实例 B：只错开宿主机端口，容器内仍是 8081
+  environment:
+    INSTANCE_ID: user-service-b-1
+```
+
+两个实例容器内端口都是 `8081`（代码没改），只有**宿主机端口**必须错开，否则第二个容器会报 `port is already allocated`；这样也满足“不绑定同一宿主机端口”的要求。
+
+`user-service` 的 `UserController` 每次查询打印实例标识与计数，用于核对请求落在哪个实例：
+
+```text
+instance=user-service-1   本实例第 1 次查询，userId=1
+instance=user-service-b-1 本实例第 1 次查询，userId=1
+```
+
+验证方法：等两个实例都注册后连发 6 次 `POST /api/lost-items`，应全部 200；日志中 `instance=user-service-1` 与 `instance=user-service-b-1` 交替出现、各 3 次，证明请求真的分发到两个实例，而不是只在注册列表里看到两行。
+
+```bash
+for i in $(seq 1 6); do
+  curl -s -o /dev/null -w "$i: %{http_code}\n" \
+    -H "Content-Type: application/json" \
+    -d '{"itemName":"lb-test","feature":"lb","userId":1}' \
+    http://localhost:8082/api/lost-items
+done
+
+docker compose logs --tail=60 user-service user-service-b | grep "instance="
+```
+
+实例下线验证：`docker compose stop user-service-b` 后再发 3 次，仍全部 200，日志只出现在 `user-service-1`，说明实例摘除后自动切到存活实例，调用方无需重启、无需改代码。若要测 503，必须把两个实例都停掉。
+
+## 5. 测试
+
+| 层次 | 内容 | 位置 |
+| --- | --- | --- |
+| Feign 客户端单测 | 用户存在、404、对方 5xx、无可用实例 | `services/lost-service/.../client/UserClientTest.java` |
+| Service 层单测 | 用户查询/校验、审核状态机与重复审核 | `services/user-service/.../UserServiceTest.java`、`services/admin-service/.../AuditServiceTest.java` |
+| 端到端 | 真实容器 + 真实 Nacos + 两个库：断言 200/400/503、JSON 字段、行数变化 | `scripts/e2e-test.sh` |
+
+`scripts/e2e-test.sh` 共 **16 项断言**（原 13 项 + 3 项 JSON 字段断言），任一失败即以非 0 退出；脚本用 `trap` 保证异常中断时也会把停掉的实例拉起来，不留残废环境。
+
+## 6. 运行命令
+
+```bash
+# 1) 启动整套环境（含两个 user-service 实例）
+docker compose up -d --build
+
+# 2) 正常发布（应 200 JSON）
+curl -s -w "\nHTTP %{http_code}\n" -H "Content-Type: application/json" \
+  -d '{"itemName":"校园卡","feature":"蓝色卡套","userId":1}' \
+  http://localhost:8082/api/lost-items
+
+# 3) 用户不存在（应 400 JSON，且不写库）
+curl -s -w "\nHTTP %{http_code}\n" -H "Content-Type: application/json" \
+  -d '{"itemName":"测试","feature":"x","userId":9999}' \
+  http://localhost:8082/api/lost-items
+
+# 4) 依赖不可用：停掉全部实例（应 503 JSON），测完恢复
+docker compose stop user-service user-service-b
+curl -s -w "\nHTTP %{http_code}\n" -H "Content-Type: application/json" \
+  -d '{"itemName":"down-test","feature":"x","userId":1}' \
+  http://localhost:8082/api/lost-items
+docker compose start user-service user-service-b
+
+# 5) 端到端脚本（Git Bash / macOS / Linux）
+bash scripts/e2e-test.sh
+echo $?     # 0 = 全部通过
+```
+
+## 7. 本周交付物
+
+| 内容 | 位置 |
+| --- | --- |
+| 需求与实现说明、实测结果 | [`docs/homework/week-08/index.md`](docs/homework/week-08/index.md) |
+| 跨服务调用过程说明 | [`docs/service-communication.md`](docs/service-communication.md) |
+| 端到端验证脚本 | [`scripts/e2e-test.sh`](scripts/e2e-test.sh) |
+| 截图 | [`docs/homework/week-08/screenshots/`](docs/homework/week-08/screenshots/) |
+
+四个提交项（① 跨服务业务流程、② OpenFeign、③ 负载均衡验证、④ 测试）的实现思路、运行命令与实测结果，见上面两份文档。
+
+---
+
+# 第九周：API 网关（gateway-service）
+
+大作业实践第一项：新增独立工程 `services/gateway-service`，把三个业务服务收拢到一个统一入口。JWT 认证与鉴权规则属于后续提交项，本章只记录网关部分。
+
+## 1. 工程与依赖
+
+新增 `services/gateway-service/`（Spring Boot 4.1.2 + Java 25，与其它服务同一套 BOM）：
+
+*   `spring-cloud-starter-gateway-server-webflux`（Spring Cloud Gateway `5.0.4`）；
+*   `spring-cloud-starter-alibaba-nacos-discovery` + `spring-cloud-starter-loadbalancer`（路由目标用服务名）；
+*   `spring-boot-starter-actuator`（健康检查）。
+
+## 2. 路由配置
+
+`services/gateway-service/src/main/resources/application.yml`（Gateway 5.x 的配置前缀是 `spring.cloud.gateway.server.webflux`）：
+
+```yaml
+server:
+  port: 8080
+spring:
+  application:
+    name: gateway-service
+  cloud:
+    gateway:
+      server:
+        webflux:
+          routes:
+            - id: user-service-route
+              uri: lb://user-service
+              predicates:
+                - Path=/api/users/**
+            - id: lost-service-route
+              uri: lb://lost-service
+              predicates:
+                - Path=/api/lost-items/**
+            - id: admin-service-route
+              uri: lb://admin-service
+              predicates:
+                - Path=/api/admin/**
+```
+
+| 路由 | 匹配 | 目标 | 后端接口 |
+| --- | --- | --- | --- |
+| `user-service-route` | `/api/users/**` | `lb://user-service` | `GET /api/users/{id}` |
+| `lost-service-route` | `/api/lost-items/**` | `lb://lost-service` | `POST /api/lost-items` |
+| `admin-service-route` | `/api/admin/**` | `lb://admin-service` | `GET/POST /api/admin/audits` |
+
+`lb://` 表示按服务名转发：网关从 Nacos 取实例列表，再由 LoadBalancer 选一个实例，配置里不出现任何实例 IP/端口；没有加 `StripPrefix`，因为后端路径就是这个前缀。
+
+## 3. 健康检查入口
+
+*   `GET http://localhost:8080/api/health` → `{"status":"UP","service":"gateway-service","port":8080}`（网关自建 Controller）；
+*   `GET http://localhost:8080/actuator/health` → `{"status":"UP",...}`（Actuator）。
+
+## 4. 运行与验证
+
+```bash
+# 启动（含网关；首次构建 4 个服务镜像）
+docker compose up -d --build
+
+# 三条路由都从统一入口 8080 访问
+curl -s -w "\nHTTP %{http_code}\n" http://localhost:8080/api/users/1
+curl -s -w "\nHTTP %{http_code}\n" -H "Content-Type: application/json" \
+  -d '{"itemName":"gateway-test","feature":"gateway","userId":1}' \
+  http://localhost:8080/api/lost-items
+curl -s -w "\nHTTP %{http_code}\n" http://localhost:8080/api/admin/audits
+
+# 业务拒绝经网关仍保留 400
+curl -s -w "\nHTTP %{http_code}\n" -H "Content-Type: application/json" \
+  -d '{"itemName":"gateway-test","feature":"gateway","userId":9999}' \
+  http://localhost:8080/api/lost-items
+```
+
+实测（2026-11-21）：三条路由经 8080 分别返回 200 / 200 / 200，响应体与直连后端一致；`userId=9999` 经网关返回 400 与原始业务错误；网关启动日志可见 `nacos registry, ZCL_GROUP gateway-service 172.19.0.10:8080 register finished`，说明网关本身也已注册到 Nacos。
+
+## 5. 文档与截图
+
+实现细节、验收点对照、截图清单见 [`docs/homework/week-09/index.md`](docs/homework/week-09/index.md)，截图保存到 [`docs/homework/week-09/screenshots/`](docs/homework/week-09/screenshots/)。
 
 

@@ -146,6 +146,30 @@ services:
     networks:
       - micro-net
 
+  # =========== API 网关（统一入口 8080） ===========
+  gateway-service:
+    build:
+      context: ./services/gateway-service
+    ports:
+      - "8080:8080" # 统一对外端口：所有业务请求只从这里进
+    environment:
+      NACOS_SERVER_ADDR: ${NACOS_SERVER_ADDR:-nacos:8848}
+      NACOS_USERNAME: ${NACOS_USERNAME:-nacos}
+      NACOS_PASSWORD: ${NACOS_PASSWORD}
+      NACOS_GROUP: ${NACOS_GROUP:-ZCL_GROUP}
+      INSTANCE_ID: gateway-service-1
+    depends_on:
+      nacos:
+        condition: service_started
+      user-service:
+        condition: service_started
+      lost-service:
+        condition: service_started
+      admin-service:
+        condition: service_started
+    networks:
+      - micro-net
+
   # =========== Nacos 注册中心 ===========
   nacos:
     image: nacos/nacos-server:v3.2.4

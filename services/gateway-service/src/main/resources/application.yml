@@ -1,0 +1,45 @@
+server:
+  # 统一对外端口：所有服务只通过网关访问
+  port: 8080
+
+spring:
+  application:
+    name: gateway-service
+  cloud:
+    nacos:
+      discovery:
+        server-addr: ${NACOS_SERVER_ADDR:nacos:8848}
+        username: ${NACOS_USERNAME:nacos}
+        password: "${NACOS_PASSWORD:}"
+        group: ${NACOS_GROUP:ZCL_GROUP}
+        register-enabled: true
+    # Spring Cloud Gateway 5.x 的配置前缀
+    gateway:
+      server:
+        webflux:
+          routes:
+            # 1) 用户服务：GET /api/users/{id}
+            - id: user-service-route
+              uri: lb://user-service
+              predicates:
+                - Path=/api/users/**
+            # 2) 失物服务：POST /api/lost-items
+            - id: lost-service-route
+              uri: lb://lost-service
+              predicates:
+                - Path=/api/lost-items/**
+            # 3) 审核服务：GET/POST /api/admin/audits
+            - id: admin-service-route
+              uri: lb://admin-service
+              predicates:
+                - Path=/api/admin/**
+
+# 健康检查入口之一：/actuator/health（另一个入口 /api/health 由 HealthController 提供）
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
