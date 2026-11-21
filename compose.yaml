@@ -71,6 +71,8 @@ services:
       # 认证服务：JWT 签名密钥由本地 .env 注入，仓库里不保存
       JWT_SECRET: ${JWT_SECRET}
       JWT_EXPIRATION_SECONDS: ${JWT_EXPIRATION_SECONDS:-3600}
+      # 下游校验网关身份头签名
+      GATEWAY_SHARED_SECRET: ${GATEWAY_SHARED_SECRET}
       # 实例标识：日志里用它可以看清负载均衡分到了哪个实例
       INSTANCE_ID: user-service-1
     depends_on:
@@ -97,6 +99,7 @@ services:
       NACOS_GROUP: ${NACOS_GROUP:-ZCL_GROUP}
       JWT_SECRET: ${JWT_SECRET}
       JWT_EXPIRATION_SECONDS: ${JWT_EXPIRATION_SECONDS:-3600}
+      GATEWAY_SHARED_SECRET: ${GATEWAY_SHARED_SECRET}
       INSTANCE_ID: user-service-b-1
     depends_on:
       nacos:
@@ -162,6 +165,9 @@ services:
       NACOS_USERNAME: ${NACOS_USERNAME:-nacos}
       NACOS_PASSWORD: ${NACOS_PASSWORD}
       NACOS_GROUP: ${NACOS_GROUP:-ZCL_GROUP}
+      # 网关鉴权：与 user-service 共用 JWT 密钥；下游身份头用共享密钥做 HMAC 签名
+      JWT_SECRET: ${JWT_SECRET}
+      GATEWAY_SHARED_SECRET: ${GATEWAY_SHARED_SECRET}
       INSTANCE_ID: gateway-service-1
     depends_on:
       nacos:

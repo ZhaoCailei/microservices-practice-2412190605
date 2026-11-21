@@ -36,6 +36,9 @@ app:
     secret: ${JWT_SECRET:}
     # Token 有效期（秒），默认 1 小时
     expiration-seconds: ${JWT_EXPIRATION_SECONDS:3600}
+  gateway:
+    # 网关与下游服务共享的签名密钥：/api/users/current 用它校验请求确实来自网关
+    shared-secret: ${GATEWAY_SHARED_SECRET:}
 
 # Actuator 健康端点：/actuator/health，暴露组件明细（db、diskSpace 等）
 management:

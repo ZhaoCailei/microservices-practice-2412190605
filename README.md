@@ -557,7 +557,7 @@ echo $?     # 0 = 全部通过
 
 # 第九周：API 网关与认证服务
 
-大作业实践前两项：新增独立工程 `services/gateway-service` 作为统一入口（第一项），并在 `user-service` 中实现登录、JWT 签发/验签、角色与密码哈希（第二项）。「鉴权规则」（网关拦截未授权/越权）属于第三项，本章暂不涉及。
+大作业实践三项：① 新增 `services/gateway-service` 作为统一入口；② 在 `user-service` 中实现登录、JWT 签发/验签、角色与密码哈希；③ 在网关实现鉴权（401/403、角色校验、伪造身份头处理）。第三项详见 §6 与 [`docs/security.md`](docs/security.md)。
 
 ## 1. 网关工程与依赖
 
@@ -620,15 +620,24 @@ spring:
 # 启动（含网关；首次构建 4 个服务镜像）
 docker compose up -d --build
 
-# 三条路由都从统一入口 8080 访问
-curl -s -w "\nHTTP %{http_code}\n" http://localhost:8080/api/users/1
-curl -s -w "\nHTTP %{http_code}\n" -H "Content-Type: application/json" \
+# 先登录拿 Token（鉴权开启后，业务路由必须带 Token）
+TOKEN=$(curl -s -H "Content-Type: application/json" \
+  -d '{"username":"student_zhang","password":"Student@123"}' \
+  http://localhost:8080/api/auth/login | grep -o '"token":"[^"]*"' | sed 's/"token":"//;s/"$//')
+
+# 三条业务路由都从统一入口 8080 访问，并带上 Token
+curl -s -w "\nHTTP %{http_code}\n" -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8080/api/users/1
+curl -s -w "\nHTTP %{http_code}\n" -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
   -d '{"itemName":"gateway-test","feature":"gateway","userId":1}' \
   http://localhost:8080/api/lost-items
-curl -s -w "\nHTTP %{http_code}\n" http://localhost:8080/api/admin/audits
+curl -s -w "\nHTTP %{http_code}\n" -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8080/api/admin/audits
 
 # 业务拒绝经网关仍保留 400
-curl -s -w "\nHTTP %{http_code}\n" -H "Content-Type: application/json" \
+curl -s -w "\nHTTP %{http_code}\n" -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
   -d '{"itemName":"gateway-test","feature":"gateway","userId":9999}' \
   http://localhost:8080/api/lost-items
 ```
@@ -694,7 +703,67 @@ bash scripts/auth-test.sh     # 13 项断言，全 PASS 退出码为 0
 | `services/user-service/.../security/JwtConfig.java` | BCrypt、JwtEncoder、JwtDecoder Bean |
 | `services/user-service/src/main/resources/data.sql` | 两个账号的 BCrypt 哈希种子 |
 
-## 6. 文档与截图
+## 6. 网关鉴权
+
+### 6.1 规则
+
+| 路径 | 规则 | 结果 |
+| --- | --- | --- |
+| `/api/health`、`/actuator/health`、`POST /api/auth/login` | 公开 | 直接放行 |
+| `/api/auth/me`、`/api/users/**`、`/api/lost-items/**` | 需要合法 Bearer Token | 无/无效 → 401；有效 → 200 |
+| `/api/admin/**` | 需要 Token 且 `role=ADMIN` | 普通用户 → 403；管理员 → 200 |
+
+实现：`services/gateway-service/.../filter/AuthGlobalFilter.java`（全局过滤器，`getOrder() = -100`）。
+
+- 验签使用与 user-service 相同的 `JWT_SECRET`（网关只验签、不签发）；
+- 验签通过后先删除客户端可能伪造的 `X-User-Id / X-Username / X-User-Role / X-Gateway-Signature`，再写入真实身份；
+- 下游 `GET /api/users/current` 用 `GATEWAY_SHARED_SECRET` 校验 `X-Gateway-Signature`（HMAC-SHA256），直接访问 8081 或伪造身份头都会 401。
+
+### 6.2 验证
+
+```bash
+# 未登录 → 401
+curl -s -w "\nHTTP %{http_code}\n" http://localhost:8080/api/users/current
+
+# 普通用户访问管理员接口 → 403
+TOKEN=$(curl -s -H "Content-Type: application/json" \
+  -d '{"username":"student_zhang","password":"Student@123"}' \
+  http://localhost:8080/api/auth/login | grep -o '"token":"[^"]*"' | sed 's/"token":"//;s/"$//')
+curl -s -w "\nHTTP %{http_code}\n" -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8080/api/admin/audits
+
+# 管理员访问同一接口 → 200
+ADMIN_TOKEN=$(curl -s -H "Content-Type: application/json" \
+  -d '{"username":"admin_li","password":"Admin@123"}' \
+  http://localhost:8080/api/auth/login | grep -o '"token":"[^"]*"' | sed 's/"token":"//;s/"$//')
+curl -s -w "\nHTTP %{http_code}\n" -H "Authorization: Bearer $ADMIN_TOKEN" \
+  http://localhost:8080/api/admin/audits
+
+# 直连后端 + 伪造身份头 → 401
+curl -s -w "\nHTTP %{http_code}\n" \
+  -H "X-User-Id: 2" -H "X-User-Role: ADMIN" -H "X-Gateway-Signature: forged" \
+  http://localhost:8081/api/users/current
+
+# 一键验证（10 项断言）
+bash scripts/authz-test.sh
+```
+
+### 6.3 密钥
+
+| 密钥 | 用途 | 存放 |
+| --- | --- | --- |
+| `JWT_SECRET` | JWT 签发/验签，user-service 与 gateway 共用 | `.env`（已忽略） |
+| `GATEWAY_SHARED_SECRET` | 网关身份头 HMAC 签名，下游校验 | `.env`（已忽略） |
+
+```bash
+# 首次使用：生成并写入 .env
+echo "JWT_SECRET=$(openssl rand -base64 32)" >> .env
+echo "GATEWAY_SHARED_SECRET=$(openssl rand -base64 32)" >> .env
+```
+
+安全设计的完整说明见 [`docs/security.md`](docs/security.md)。
+
+## 7. 文档与截图
 
 实现细节、验收点对照、截图清单见 [`docs/homework/week-09/index.md`](docs/homework/week-09/index.md)，截图保存到 [`docs/homework/week-09/screenshots/`](docs/homework/week-09/screenshots/)。
 

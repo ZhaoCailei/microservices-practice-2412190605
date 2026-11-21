@@ -46,6 +46,12 @@
 			<artifactId>spring-boot-starter-actuator</artifactId>
 		</dependency>
 
+		<!-- 网关验签：与 user-service 使用同一套 Nimbus JOSE -->
+		<dependency>
+			<groupId>org.springframework.security</groupId>
+			<artifactId>spring-security-oauth2-jose</artifactId>
+		</dependency>
+
 		<!-- 测试依赖 -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>

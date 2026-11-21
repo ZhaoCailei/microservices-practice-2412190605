@@ -163,29 +163,40 @@ $ curl -o /dev/null -w "%{http_code}" http://localhost:8080/actuator/health
 
 补充证据：连续 6 次经网关访问 `/api/users/1`，全部 200；`user-service` 两个实例的日志分别出现命中记录（`instance=user-service-1` 与 `instance=user-service-b-1`），说明网关的 `lb://user-service` 确实经过 LoadBalancer 分发到两个实例，而不是把请求固定发给某一个容器。
 
+> 注意：上表是**第一项完成时（尚未开启网关鉴权）**的实测。第三项「网关鉴权」完成后（见 §3），上表第 1/2/4 项改为**必须携带 Token**，未登录访问会返回 401；直连后端端口的行为不变。
+
 ### 1.7 运行命令
 
 ```bash
 # 1) 启动整套环境（首次会构建 4 个服务镜像）
 docker compose up -d --build
 
-# 2) 网关健康
+# 2) 网关健康（公开路径，无需 Token）
 curl -s -w "\nHTTP %{http_code}\n" http://localhost:8080/api/health
 curl -s -o /dev/null -w "actuator: %{http_code}\n" http://localhost:8080/actuator/health
 
-# 3) 三条路由（全部经过网关，后端端口只用于对照）
-curl -s -w "\nHTTP %{http_code}\n" http://localhost:8080/api/users/1
-curl -s -w "\nHTTP %{http_code}\n" -H "Content-Type: application/json" \
+# 3) 先登录拿 Token（第三项开启鉴权后，业务路由必须带 Token）
+TOKEN=$(curl -s -H "Content-Type: application/json" \
+  -d '{"username":"student_zhang","password":"Student@123"}' \
+  http://localhost:8080/api/auth/login | grep -o '"token":"[^"]*"' | sed 's/"token":"//;s/"$//')
+
+# 4) 三条业务路由（全部经过网关）
+curl -s -w "\nHTTP %{http_code}\n" -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8080/api/users/1
+curl -s -w "\nHTTP %{http_code}\n" -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
   -d '{"itemName":"gateway-test","feature":"gateway","userId":1}' \
   http://localhost:8080/api/lost-items
-curl -s -w "\nHTTP %{http_code}\n" http://localhost:8080/api/admin/audits
+curl -s -w "\nHTTP %{http_code}\n" -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8080/api/admin/audits
 
-# 4) 业务拒绝仍保留原有状态码（400）
-curl -s -w "\nHTTP %{http_code}\n" -H "Content-Type: application/json" \
+# 5) 业务拒绝仍保留原有状态码（400）
+curl -s -w "\nHTTP %{http_code}\n" -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
   -d '{"itemName":"gateway-test","feature":"gateway","userId":9999}' \
   http://localhost:8080/api/lost-items
 
-# 5) 单元测试（网关工程内）
+# 6) 单元测试（网关工程内）
 cd services/gateway-service && ./mvnw test
 ```
 
@@ -389,3 +400,153 @@ bash scripts/auth-test.sh
 - 公开路径（`/api/health`、登录接口）放行。
 
 这样“未授权和越权能被阻止”才有可演示的证据；本项的 `/api/auth/me` 已经验证了验签代码本身是通的。
+
+## 3. 网关鉴权
+
+### 3.1 验收点对照
+
+| 要求 | 实现 | 证据 |
+|---|---|---|
+| 未登录访问受保护接口返回 401 | 网关全局过滤器校验 `Authorization: Bearer`，缺失或无效返回 401 | §3.5 实测 |
+| 登录后携带 Token 可访问 | 验签通过后放行；`/api/users/current` 可读到网关注入的身份 | §3.5 |
+| 至少 1 个接口需要角色校验 | `/api/admin/**` 要求 `role=ADMIN`，普通用户返回 403 | §3.3、§3.5 |
+| 覆盖客户端伪造的身份请求头 | 网关先删除 `X-User-Id/X-Username/X-User-Role/X-Gateway-Signature`，再注入验签后的身份 | §3.4、§3.5 |
+| 说明下游如何避免绕过网关直接访问 | 下游用 HMAC 签名校验请求确实来自网关；生产只暴露 8080 | §3.4 |
+| 提交网关鉴权与角色校验规则 | `AuthGlobalFilter` + `docs/security.md` | §3.2、§3.3 |
+
+### 3.2 实现位置
+
+| 文件 | 作用 |
+|---|---|
+| `services/gateway-service/.../filter/AuthGlobalFilter.java` | 全局过滤器：401/403、身份头覆盖、HMAC 签名 |
+| `services/gateway-service/.../security/JwtConfig.java` | 网关侧 JWT 验签（与 user-service 共用 `JWT_SECRET`） |
+| `services/user-service/.../controller/CurrentUserController.java` | 下游接口 `GET /api/users/current`，校验网关签名 |
+| `services/gateway-service/src/main/resources/application.yml` | `app.jwt.secret`、`app.gateway.shared-secret` |
+| `compose.yaml` | gateway 与 user-service 注入 `JWT_SECRET`、`GATEWAY_SHARED_SECRET` |
+| `scripts/authz-test.sh` | 网关鉴权端到端脚本（10 项断言） |
+
+核心逻辑（过滤器）：
+
+```java
+// 公开路径放行：/api/health、/actuator/health、/api/auth/login
+// 其余路径：缺少 Bearer → 401；验签失败 → 401
+if (path.startsWith("/api/admin/") && !"ADMIN".equals(role)) {
+    return reject(exchange, HttpStatus.FORBIDDEN, "角色不足：该接口需要 ADMIN");
+}
+// 删除客户端伪造的身份头，再写入网关验证后的身份 + HMAC 签名
+headers.remove("X-User-Id");
+headers.remove("X-Username");
+headers.remove("X-User-Role");
+headers.remove("X-Gateway-Signature");
+headers.set("X-User-Id", userId);
+headers.set("X-Username", username);
+headers.set("X-User-Role", role);
+headers.set("X-Gateway-Signature", sign(userId, role));
+```
+
+### 3.3 拦截规则
+
+| 路径 | 规则 | 结果 |
+|---|---|---|
+| `/api/health`、`/actuator/health`、`POST /api/auth/login` | 公开 | 直接放行 |
+| `/api/auth/me`、`/api/users/**`、`/api/lost-items/**` | 需要合法 Token | 无 Token/无效 → 401；有效 → 200 |
+| `/api/admin/**` | 需要 Token 且 `role=ADMIN` | 普通用户 → 403；管理员 → 200 |
+
+### 3.4 伪造身份头与绕过网关
+
+**伪造头会被覆盖**：客户端若自带
+
+```http
+X-User-Id: 2
+X-User-Role: ADMIN
+X-Username: admin_li
+```
+
+网关在验签后先把这些头删掉，再用 JWT 里的真实身份重写，因此伪造的 ADMIN 不会生效。
+
+**下游只认网关签名**：网关用 `GATEWAY_SHARED_SECRET` 对 `"userId:role"` 做 HMAC-SHA256，放在 `X-Gateway-Signature`；`GET /api/users/current` 用同一密钥重算并比较（`MessageDigest.isEqual`）。直接访问 8081 或伪造头都算不出正确签名 → 401。
+
+**避免绕过网关**：
+
+1. 生产只暴露 8080，8081/8082/8083 仅本地调试用；
+2. 下游接口校验 `X-Gateway-Signature`，即使端口可达也无法伪造身份；
+3. 敏感接口在网关做角色校验，下游可再验一次 JWT 做纵深防御。
+
+### 3.5 实测结果（2026-11-21）
+
+```text
+GET  http://localhost:8080/api/users/current               （无 Token）→ 401 {"error":"未登录：缺少 Authorization: Bearer <token>"}
+POST http://localhost:8080/api/lost-items                  （无 Token）→ 401
+GET  http://localhost:8080/api/health                      （无 Token）→ 200
+
+# 普通用户登录
+POST http://localhost:8080/api/auth/login  student_zhang/Student@123 → 200（拿到 token）
+GET  http://localhost:8080/api/auth/me      Bearer <token> → 200
+POST http://localhost:8080/api/lost-items   Bearer <token> → 200
+
+# 角色校验
+GET  http://localhost:8080/api/admin/audits Bearer <USER token>  → 403 {"error":"角色不足：该接口需要 ADMIN"}
+GET  http://localhost:8080/api/admin/audits Bearer <ADMIN token> → 200
+
+# 伪造身份头
+GET  http://localhost:8081/api/users/current  X-User-Id: 2 + X-User-Role: ADMIN + X-Gateway-Signature: forged → 401
+GET  http://localhost:8080/api/users/current  Bearer <USER token> + X-User-Role: ADMIN → 200，返回 role=USER（伪造头被覆盖）
+```
+
+脚本输出：
+
+```text
+=== 网关鉴权验证：http://localhost:8080 ===
+[PASS] 未登录访问 /api/users/current 返回 401
+[PASS] 未登录发布失物返回 401
+[PASS] 健康检查公开访问返回 200
+[PASS] 普通用户登录成功
+[PASS] 登录后携带 Token 访问 /api/auth/me 返回 200
+[PASS] 登录后发布失物返回 200
+[PASS] 普通用户访问管理员接口返回 403
+[PASS] 管理员访问管理员接口返回 200
+[PASS] 直连 8081 伪造身份头被拒绝（401）
+[PASS] 伪造的 X-User-Role 被网关覆盖，身份以 Token 为准（USER）
+结果：PASS=10  FAIL=0
+```
+
+### 3.6 运行命令
+
+```bash
+# 1) 重新构建网关与两个 user-service 实例（鉴权代码 + 新环境变量）
+docker compose up -d --build gateway-service user-service user-service-b
+
+# 2) 一键验证（10 项）
+bash scripts/authz-test.sh
+
+# 3) 手工对照
+curl -s -w "\nHTTP %{http_code}\n" http://localhost:8080/api/users/current
+TOKEN=$(curl -s -H "Content-Type: application/json" \
+  -d '{"username":"student_zhang","password":"Student@123"}' \
+  http://localhost:8080/api/auth/login | grep -o '"token":"[^"]*"' | sed 's/"token":"//;s/"$//')
+curl -s -w "\nHTTP %{http_code}\n" -H "Authorization: Bearer $TOKEN" \
+  http://localhost:8080/api/admin/audits
+```
+
+### 3.7 截图清单（提交 1–5 张）
+
+| # | 文件名建议 | 截图内容 |
+|---|---|---|
+| 1 | `authz-401.png` | 无 Token 访问 `/api/users/current`，401 + `未登录…` |
+| 2 | `authz-200.png` | 登录拿 Token 后访问同一接口，200 返回身份 |
+| 3 | `authz-403.png` | 普通用户访问 `/api/admin/audits`，403 + `角色不足` |
+| 4 | `authz-admin-200.png` | 管理员 Token 访问同一接口，200 |
+| 5 | `authz-forged-header.png` | 直连 8081 带伪造 `X-User-Role: ADMIN`，401；最好同屏对比经网关时的返回 |
+
+截图保存到 `docs/homework/week-09/screenshots/`。
+
+### 3.8 提交清单
+
+| 项 | 内容 |
+|---|---|
+| 网关鉴权代码 | `AuthGlobalFilter`、网关 `JwtConfig` |
+| 角色校验规则 | `/api/admin/**` → 仅 `ADMIN`；规则表见 §3.3 |
+| 下游签名校验 | `CurrentUserController`（`GET /api/users/current`） |
+| 安全文档 | [`docs/security.md`](../../security.md)（认证流程、角色权限、路由表、伪造头处理） |
+| 脚本 | `scripts/authz-test.sh`（10 项断言） |
+| 文档 | 本文件 §3 |

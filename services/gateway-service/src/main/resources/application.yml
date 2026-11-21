@@ -39,6 +39,13 @@ spring:
               predicates:
                 - Path=/api/admin/**
 
+# 网关鉴权：JWT 只验签（与 user-service 共用 JWT_SECRET）；下游签名用 GATEWAY_SHARED_SECRET
+app:
+  jwt:
+    secret: ${JWT_SECRET:}
+  gateway:
+    shared-secret: ${GATEWAY_SHARED_SECRET:}
+
 # 健康检查入口之一：/actuator/health（另一个入口 /api/health 由 HealthController 提供）
 management:
   endpoints:
