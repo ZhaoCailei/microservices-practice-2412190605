@@ -688,10 +688,10 @@ curl -s -H "Authorization: Bearer <token>" http://localhost:8080/api/auth/me
 ### 5.4 认证脚本
 
 ```bash
-bash scripts/auth-test.sh     # 13 项断言，全 PASS 退出码为 0
+bash scripts/auth-test.sh     # 18 项断言：未登录/登录/授权/越权，全 PASS 退出码为 0
 ```
 
-覆盖：登录成功、角色、错误密码 401、不存在用户 401、`/me` 验签、缺 Token 401、篡改签名 401、管理员登录与 `/me`、数据库哈希格式、经网关登录。
+覆盖：登录成功与角色、错误密码 401、不存在用户 401、`/me` 验签、缺 Token 401、篡改签名 401、管理员登录与 `/me`、数据库哈希格式、经网关登录、未登录访问受保护接口 401、登录后 200、USER 越权 403、ADMIN 授权 200、伪造身份头 401。
 
 ### 5.5 实现位置
 

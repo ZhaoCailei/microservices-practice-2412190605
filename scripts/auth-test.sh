@@ -5,6 +5,7 @@
 set -u
 
 BASE_URL="${AUTH_BASE_URL:-http://localhost:8081}"
+USER_URL="${USER_URL:-http://localhost:8081}"
 GATEWAY_URL="${GATEWAY_URL:-http://localhost:8080}"
 PASS=0
 FAIL=0
@@ -16,11 +17,15 @@ json_field() { # $1=json $2=field（只处理顶层字符串字段）
   echo "$1" | grep -o "\"$2\":\"[^\"]*\"" | head -1 | sed "s/\"$2\":\"//;s/\"$//"
 }
 
-request() { # $1=method $2=url $3=data $4=Authorization头
-  local method="$1" url="$2" data="${3:-}" hdr="${4:-}"
+request() { # $1=method $2=url $3=data，其余参数为请求头
+  local method="$1" url="$2" data="${3:-}"
+  shift 3
   local args=(-s -w $'\n%{http_code}' -X "$method" "$url")
   [ -n "$data" ] && args+=(-H "Content-Type: application/json" -d "$data")
-  [ -n "$hdr" ] && args+=(-H "$hdr")
+  local h
+  for h in "$@"; do
+    [ -n "$h" ] && args+=(-H "$h")
+  done
   local out
   out=$(curl "${args[@]}" 2>/dev/null)
   STATUS=$(echo "$out" | tail -1)
@@ -112,6 +117,47 @@ if [ "$STATUS" = "200" ] && [ -n "$(json_field "$BODY" token)" ]; then
   pass "经网关 8080 登录成功"
 else
   fail "经网关登录失败：HTTP $STATUS，body=$BODY"
+fi
+
+# 11) 未登录访问受保护接口（经网关）→ 401
+request GET "$GATEWAY_URL/api/users/current"
+if [ "$STATUS" = "401" ]; then
+  pass "未登录访问受保护接口返回 401"
+else
+  fail "未登录应 401，实际 $STATUS"
+fi
+
+# 12) 登录后携带 Token 访问受保护接口 → 200
+request GET "$GATEWAY_URL/api/users/current" "" "Authorization: Bearer $TOKEN"
+if [ "$STATUS" = "200" ] && [ "$(json_field "$BODY" username)" = "student_zhang" ]; then
+  pass "登录后携带 Token 访问受保护接口返回 200"
+else
+  fail "带 Token 访问应 200，实际 $STATUS，body=$BODY"
+fi
+
+# 13) 低权限（USER）访问管理接口 → 403（越权被拒绝）
+request GET "$GATEWAY_URL/api/admin/audits" "" "Authorization: Bearer $TOKEN"
+if [ "$STATUS" = "403" ]; then
+  pass "USER 访问管理接口被拒绝（403）"
+else
+  fail "USER 访问管理接口应 403，实际 $STATUS"
+fi
+
+# 14) 管理员访问管理接口 → 200（授权通过）
+request GET "$GATEWAY_URL/api/admin/audits" "" "Authorization: Bearer $ADMIN_TOKEN"
+if [ "$STATUS" = "200" ]; then
+  pass "ADMIN 访问管理接口返回 200"
+else
+  fail "ADMIN 访问管理接口应 200，实际 $STATUS"
+fi
+
+# 15) 绕过网关直连后端 + 伪造身份头 → 401（签名校验挡住）
+request GET "$USER_URL/api/users/current" "" \
+  "X-User-Id: 2" "X-User-Role: ADMIN" "X-Gateway-Signature: forged"
+if [ "$STATUS" = "401" ]; then
+  pass "绕过网关伪造身份头被拒绝（401）"
+else
+  fail "伪造身份头应 401，实际 $STATUS"
 fi
 
 echo ""

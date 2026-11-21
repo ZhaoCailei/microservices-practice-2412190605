@@ -257,7 +257,7 @@ cd services/gateway-service && ./mvnw test
 | `services/user-service/.../model/User.java` | 新增 `passwordHash`（`@JsonIgnore`）与 `role` 字段 |
 | `services/user-service/src/main/resources/data.sql` | 两个测试账号的 BCrypt 哈希种子 |
 | `services/user-service/src/main/resources/application.yml` | `app.jwt.secret` / `app.jwt.expiration-seconds` |
-| `scripts/auth-test.sh` | 认证端到端验证脚本（10 项断言） |
+| `scripts/auth-test.sh` | 认证与鉴权端到端验证脚本（18 项断言） |
 
 ### 2.4 登录接口
 
@@ -358,7 +358,7 @@ POST ... {"username":"admin_li","password":"Admin@123"}
 bash scripts/auth-test.sh
 ```
 
-脚本共 10 项检查：登录成功、角色正确、错误密码 401、不存在用户 401、`/me` 验签、缺 Token 401、篡改签名 401、管理员登录与 `/me`、数据库哈希格式、经网关登录。结果示例：
+脚本共 18 项检查：登录成功、角色正确、错误密码 401、不存在用户 401、`/me` 验签、缺 Token 401、篡改签名 401、管理员登录与 `/me`、数据库哈希格式、经网关登录，以及未登录 401、登录后可访问 200、USER 越权 403、ADMIN 授权 200、伪造身份头 401（§4 会按“未登录/登录/授权/越权”四类场景展开）。结果示例：
 
 ```text
 [PASS] 普通用户登录成功，返回三段式 JWT
@@ -374,7 +374,12 @@ bash scripts/auth-test.sh
 [PASS] admin_li 存的是 BCrypt 哈希（$2a$，长度 60）
 [PASS] 密码列不含明文特征（@）
 [PASS] 经网关 8080 登录成功
-结果：PASS=13  FAIL=0
+[PASS] 未登录访问受保护接口返回 401
+[PASS] 登录后携带 Token 访问受保护接口返回 200
+[PASS] USER 访问管理接口被拒绝（403）
+[PASS] ADMIN 访问管理接口返回 200
+[PASS] 绕过网关伪造身份头被拒绝（401）
+结果：PASS=18  FAIL=0
 ```
 
 > 上面的条数与最终输出以脚本实际运行为准（脚本会按环境略有增减）。
@@ -387,7 +392,7 @@ bash scripts/auth-test.sh
 | 2 | `auth-login-401.png` | 同一接口改成错误密码，401 与 `{"error":"用户名或密码错误"}` |
 | 3 | `auth-me.png` | `GET /api/auth/me` 带 Bearer Token，200 返回 `username/role` |
 | 4 | `auth-hash-db.png` | 数据库里 `users` 表的 `password_hash` 列，显示 `$2a$10$...`，证明没有明文 |
-| 5 | `auth-script.png` | `bash scripts/auth-test.sh` 的 `[PASS]` 输出与最后的 `PASS=13 FAIL=0` |
+| 5 | `auth-script.png` | `bash scripts/auth-test.sh` 的 `[PASS]` 输出与最后的 `PASS=18 FAIL=0` |
 
 截图保存到 `docs/homework/week-09/screenshots/`。
 
@@ -550,3 +555,82 @@ curl -s -w "\nHTTP %{http_code}\n" -H "Authorization: Bearer $TOKEN" \
 | 安全文档 | [`docs/security.md`](../../security.md)（认证流程、角色权限、路由表、伪造头处理） |
 | 脚本 | `scripts/authz-test.sh`（10 项断言） |
 | 文档 | 本文件 §3 |
+
+## 4. 测试脚本
+
+### 4.1 实现思路
+
+手工截图只能证明某一次请求的结果，脚本的价值是**可重复、可回归**：一条命令覆盖“未登录 / 登录 / 授权 / 越权”四类场景，任何一项不通过都会以非 0 退出码失败。
+
+| 场景 | 脚本中的断言 | 期望 |
+|---|---|---|
+| 未登录 | 无 Token 访问 `/api/users/current`、`POST /api/lost-items` | 401 |
+| 登录 | `student_zhang` / `admin_li` 登录，返回三段式 JWT 与正确 `role` | 200 |
+| 授权 | 带 Token 访问 `/api/auth/me`、`/api/users/current`、发布失物 | 200 |
+| 越权 | USER 访问 `/api/admin/audits`；直连 8081 伪造身份头 | 403 / 401 |
+| 密码安全 | 数据库 `password_hash` 为 `$2a$` 60 位、不含明文特征 | 通过 |
+
+脚本 `scripts/auth-test.sh` 的结构：
+
+1. `request()` 统一封装 `curl`：参数为方法、URL、JSON body、任意多个请求头，输出解析成 `STATUS` 与 `BODY`；
+2. `json_field()` 从响应里取字段（token、role、username）；
+3. 每个断言打印 `[PASS]` / `[FAIL]`，失败只累加计数不中断，最后汇总并 `exit 1`；
+4. 数据库哈希检查通过 `docker compose exec -T user-db` 执行 `mysql` 查询；
+5. 默认访问 `localhost:8081/8080`，可用 `AUTH_BASE_URL`、`USER_URL`、`GATEWAY_URL` 环境变量覆盖。
+
+### 4.2 运行命令
+
+```bash
+# Git Bash / Linux / macOS
+bash scripts/auth-test.sh
+
+# PowerShell 里不认 bash，用 Git Bash 的绝对路径
+& "C:\Program Files\Git\bin\bash.exe" scripts/auth-test.sh
+```
+
+### 4.3 实测结果（2026-11-21）
+
+```text
+=== 认证服务验证：http://localhost:8081 ===
+[PASS] 普通用户登录成功，返回三段式 JWT
+[PASS] 普通用户登录返回 role=USER
+[PASS] 错误密码返回 401
+[PASS] 不存在的用户返回 401
+[PASS] /me 验签通过，返回 username=student_zhang
+[PASS] 缺少 Authorization 返回 401
+[PASS] 篡改签名后返回 401
+[PASS] 管理员登录成功，返回 role=ADMIN
+[PASS] 管理员 /me 验签通过，role=ADMIN
+[PASS] student_zhang 存的是 BCrypt 哈希（$2a$，长度 60）
+[PASS] admin_li 存的是 BCrypt 哈希（$2a$，长度 60）
+[PASS] 密码列不含明文特征（@）
+[PASS] 经网关 8080 登录成功
+[PASS] 未登录访问受保护接口返回 401
+[PASS] 登录后携带 Token 访问受保护接口返回 200
+[PASS] USER 访问管理接口被拒绝（403）
+[PASS] ADMIN 访问管理接口返回 200
+[PASS] 绕过网关伪造身份头被拒绝（401）
+结果：PASS=18  FAIL=0
+```
+
+退出码为 `0`。任何一项失败时脚本会打印 `[FAIL]` 并返回 `1`，可直接用于 CI。
+
+### 4.4 截图清单（提交 1–2 张）
+
+| # | 文件名建议 | 截图内容 |
+|---|---|---|
+| 1 | `auth-test-output.png` | 终端里 `bash scripts/auth-test.sh` 的整屏输出，能看到多个 `[PASS]` 和最后 `PASS=18 FAIL=0` |
+| 2 | `auth-test-403.png`（可选） | 上半屏是 USER 的 403，下半屏是 ADMIN 的 200（如果一屏放不下，拆成两张更清楚） |
+
+截图保存到 `docs/homework/week-09/screenshots/`。
+
+> 提示：终端字体调大一点、窗口拉宽，保证 `[PASS] ...` 行不折行；Git Bash 里先 `cd` 到仓库根目录再运行脚本。
+
+### 4.5 提交清单
+
+| 项 | 内容 |
+|---|---|
+| 脚本 | `scripts/auth-test.sh`：18 项断言，覆盖未登录、登录、授权、越权，失败非 0 退出 |
+| 文档 | 本文件 §4（实现思路、运行命令、结果） |
+| 截图 | `auth-test-output.png`（及可选补充） |
+| 补充脚本 | `scripts/authz-test.sh`：更细的网关鉴权专项验证（10 项） |

@@ -153,6 +153,6 @@ curl -s -w "\nHTTP %{http_code}\n" \
 ### 7.2 自动化脚本
 
 ```bash
-bash scripts/authz-test.sh     # 10 项断言：401/403/200/角色/伪造头
-bash scripts/auth-test.sh      # 认证服务 13 项断言（登录、验签、密码哈希）
+bash scripts/authz-test.sh     # 网关鉴权专项 10 项断言（401/403/200/角色/伪造头）
+bash scripts/auth-test.sh      # 认证与鉴权 18 项断言（未登录/登录/授权/越权/密码哈希）
 ```
