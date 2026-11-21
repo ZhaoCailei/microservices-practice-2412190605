@@ -11,8 +11,8 @@
 |---|---|---|
 | 新增 `gateway-service` | `services/gateway-service/` 独立工程 | 目录结构、`pom.xml` |
 | 统一对外端口 8080 | `server.port: 8080`；compose 映射 `8080:8080` | §1.6 实测 |
-| 至少 3 条路由 | `/api/users/**`、`/api/lost-items/**`、`/api/admin/**` 三条 | §1.4 路由表 |
-| 路由目标使用服务名 | 三条都用 `lb://<服务名>`，不写实例 IP/端口 | §1.4 |
+| 至少 3 条路由 | 3 条业务路由 + 1 条认证路由（共 4 条，满足 ≥3） | §1.4 路由表 |
+| 路由目标使用服务名 | 四条都用 `lb://<服务名>`，不写实例 IP/端口 | §1.4 |
 | 保留健康检查入口 | `/api/health`（自建）与 `/actuator/health`（Actuator） | §1.5 |
 | 提交代码、配置、健康入口 | 代码 + `application.yml` + `compose.yaml` | §1.2–§1.4 |
 
@@ -83,6 +83,10 @@ spring:
       server:
         webflux:
           routes:
+            - id: auth-service-route
+              uri: lb://user-service
+              predicates:
+                - Path=/api/auth/**
             - id: user-service-route
               uri: lb://user-service
               predicates:
@@ -99,6 +103,7 @@ spring:
 
 | # | 路由 id | 匹配路径 | 目标 | 对应后端接口 |
 |---|---|---|---|---|
+| 0 | `auth-service-route` | `/api/auth/**` | `lb://user-service` | `POST /api/auth/login`、`GET /api/auth/me` |
 | 1 | `user-service-route` | `/api/users/**` | `lb://user-service` | `GET /api/users/{id}` |
 | 2 | `lost-service-route` | `/api/lost-items/**` | `lb://lost-service` | `POST /api/lost-items` |
 | 3 | `admin-service-route` | `/api/admin/**` | `lb://admin-service` | `GET/POST /api/admin/audits` |
@@ -107,7 +112,9 @@ spring:
 
 - `lb://` 表示“按服务名做客户端负载均衡”：网关向 Nacos 查 `user-service` 等服务的实例列表，再由 LoadBalancer 选一个实例转发，**配置里没有出现任何实例 IP 或端口**；
 - 没有加 `StripPrefix`，因为后端接口本身就是 `/api/users/...`、`/api/lost-items/...`、`/api/admin/...`，路径原样转发；
-- 三条路由覆盖了三个业务的真实入口，不是为凑数写的假路由（§1.6 均实测通过）。
+- 第 0 条是认证路由（第九周第二项加的），让登录与验签也走统一入口 8080。
+
+  
 
 ### 1.5 健康检查入口
 
@@ -194,19 +201,9 @@ cd services/gateway-service && ./mvnw test
 
 网关不改变后端端口，只是增加了一层统一入口；服务之间的调用（`lost-service` → `user-service`）仍然直连服务名，不经过网关，避免多一跳。
 
-### 1.9 截图清单（提交 1–5 张）
 
-| # | 文件名建议 | 截图内容 |
-|---|---|---|
-| 1 | `gateway-route-config.png` | IDEA 中打开 `services/gateway-service/src/main/resources/application.yml`，显示三条 `routes` 与 `lb://` |
-| 2 | `gateway-health.png` | 同屏两个健康入口：`/api/health` 的 JSON 与 `/actuator/health` 的 `{"status":"UP"}`，状态码 200 |
-| 3 | `gateway-routes.png` | Postman 或终端：三个接口都访问 `http://localhost:8080/...`，显示 200/200/200 及响应体 |
-| 4 | `gateway-400.png` | 经网关发 `userId=9999`，显示 400 与 `{"error":"发布失败：用户 9999 不存在..."}`（证明网关透传业务状态码） |
-| 5 | `gateway-nacos-lb.png` | Nacos 控制台服务列表（`gateway-service` 已注册、`user-service` 两个实例），配一张终端日志（两个实例各有 `instance=` 命中） |
 
-截图保存到 `docs/homework/week-09/screenshots/`。命名不必完全一致，能对应上即可。
-
-### 1.10 提交清单
+### 1.9 提交清单
 
 | 项 | 内容 |
 |---|---|
@@ -216,8 +213,179 @@ cd services/gateway-service && ./mvnw test
 | 健康检查入口 | `/api/health`、`/actuator/health` |
 | 文档 | 本文件 |
 
-### 1.11 与后续「JWT 认证授权」的衔接
+## 2. 认证服务
 
-- 网关目前只做**路由**，未做认证：所有请求都会转发给后端；
-- 后续项会在网关加全局过滤器/认证服务：登录签发 JWT → 网关校验签名与角色 → 按路径/角色放行或返回 401/403；
-- 届时 `compose.yaml` 中的网关配置会新增认证相关环境变量（如 `JWT_SECRET`），真实密钥不写进仓库，只写在本地 `.env` 或运行时注入。
+### 2.1 验收点对照
+
+| 要求 | 实现 | 证据 |
+|---|---|---|
+| 登录接口，返回 JWT | `POST /api/auth/login`：校验密码后签发 HMAC-SHA256 JWT | §2.4、§2.8 |
+| 至少 2 种角色或权限 | `USER`（普通用户）、`ADMIN`（管理员），角色写进 JWT 的 `role` claim | §2.2、§2.6 |
+| 密码以安全的哈希存储 | BCrypt（cost 10），数据库列 `password_hash`；代码里没有任何明文密码 | §2.7、§2.9 |
+| 提交登录、签发验签、角色、密码处理代码 | 见 §2.3 文件清单 | 本文件 |
+| 认证脚本返回清晰的成功/失败 | `scripts/auth-test.sh`：逐项 `[PASS]/[FAIL]`，失败时退出码非 0 | §2.9 |
+| 不提交真实密钥 | 密钥由 `.env` 的 `JWT_SECRET` 注入，仓库内无密钥 | §2.6 |
+
+### 2.2 测试账号与角色（README 同步列出）
+
+| 用户名 | 演示密码 | 角色 | 用途 |
+|---|---|---|---|
+| `student_zhang` | `Student@123` | `USER` | 普通用户：登录、验签 |
+| `admin_li` | `Admin@123` | `ADMIN` | 管理员：登录、验签、后续审核接口鉴权 |
+
+说明：表中的演示密码只用于课堂验证；数据库、代码、JWT 里都不会出现明文。两个账号由 `data.sql` 写入，写入的是 BCrypt 哈希。
+
+### 2.3 代码位置
+
+| 文件 | 作用 |
+|---|---|
+| `services/user-service/.../controller/AuthController.java` | `POST /api/auth/login`、`GET /api/auth/me`，负责 HTTP 语义（200/400/401） |
+| `services/user-service/.../service/AuthService.java` | 登录校验、调用签发、验签并取身份 |
+| `services/user-service/.../security/JwtTokenService.java` | JWT 签发（claims：subject/username/role/iat/exp）与验签 |
+| `services/user-service/.../security/JwtConfig.java` | `BCryptPasswordEncoder`、`JwtEncoder`、`JwtDecoder` 三个 Bean；从 `JWT_SECRET` 读取密钥 |
+| `services/user-service/.../model/User.java` | 新增 `passwordHash`（`@JsonIgnore`）与 `role` 字段 |
+| `services/user-service/src/main/resources/data.sql` | 两个测试账号的 BCrypt 哈希种子 |
+| `services/user-service/src/main/resources/application.yml` | `app.jwt.secret` / `app.jwt.expiration-seconds` |
+| `scripts/auth-test.sh` | 认证端到端验证脚本（10 项断言） |
+
+### 2.4 登录接口
+
+```http
+POST /api/auth/login
+Content-Type: application/json
+
+{"username":"student_zhang","password":"Student@123"}
+```
+
+成功（200）：
+
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJ1c2V...",
+  "tokenType": "Bearer",
+  "expiresIn": 3600,
+  "user": {"id": 1, "username": "student_zhang", "role": "USER"}
+}
+```
+
+失败：
+
+| 情况 | 状态码 | 响应体 |
+|---|---|---|
+| 密码错误 / 用户不存在 | `401` | `{"error":"用户名或密码错误"}`（两种情况同一句，不暴露账号是否存在） |
+| 用户名或密码为空 | `400` | `{"error":"用户名和密码不能为空"}` |
+
+### 2.5 验签接口
+
+```http
+GET /api/auth/me
+Authorization: Bearer <token>
+```
+
+- 200：`{"id":1,"username":"student_zhang","role":"USER"}`；
+- 缺少 Token、格式不是 `Bearer`、签名被篡改、Token 过期：`401`。
+
+这个接口的作用是“用受保护资源证明 Token 真的被验签”：签名不对就进不来。
+
+### 2.6 JWT 设计
+
+| 项 | 说明 |
+|---|---|
+| 算法 | HMAC-SHA256（对称密钥） |
+| claims | `iss=user-service`、`sub=用户 id`、`username`、`role`、`iat`、`exp` |
+| 有效期 | 默认 3600 秒，可用 `JWT_EXPIRATION_SECONDS` 覆盖 |
+| 密钥 | 环境变量 `JWT_SECRET`（Base64，解码后 ≥32 字节）；`.env` 里保存，仓库不提交 |
+| 缺失密钥 | 启动直接失败并提示如何生成，避免弱默认密钥进生产 |
+
+生成密钥的命令（自己执行一次，写进 `.env` 即可）：
+
+```bash
+openssl rand -base64 32
+```
+
+`compose.yaml` 已把 `JWT_SECRET` 注入两个 `user-service` 实例，所以两实例签发/验签的 Token 互相通用。
+
+### 2.7 密码安全处理
+
+1. **存储**：只存 BCrypt 哈希（`$2a$10$...`，60 字符），不存明文；`data.sql` 里同样只有哈希。
+2. **比对**：`PasswordEncoder.matches(rawPassword, hash)`，不还原明文。
+3. **不泄漏**：`User.passwordHash` 标了 `@JsonIgnore`，`GET /api/users/{id}` 不会把哈希带出去。
+4. **不暴露账号**：用户不存在与密码错误返回同一句 `用户名或密码错误`。
+5. **不落日志**：登录失败只返回统一错误，不打印密码或哈希。
+
+### 2.8 实测结果（2026-11-21）
+
+```text
+# 普通用户登录
+POST http://localhost:8081/api/auth/login  {"username":"student_zhang","password":"Student@123"}
+→ 200 {"token":"eyJhbGciOiJIUzI1NiJ9...","tokenType":"Bearer","expiresIn":3600,"user":{"id":1,"username":"student_zhang","role":"USER"}}
+
+# 密码错误
+POST 同上 {"username":"student_zhang","password":"wrong-password"}
+→ 401 {"error":"用户名或密码错误"}
+
+# 验签
+GET http://localhost:8081/api/auth/me  Authorization: Bearer <token>
+→ 200 {"id":1,"username":"student_zhang","role":"USER"}
+
+# 缺 Token
+GET http://localhost:8081/api/auth/me
+→ 401 {"error":"缺少 Authorization: Bearer <token>"}
+
+# 篡改签名
+GET http://localhost:8081/api/auth/me  Authorization: Bearer <token 末位被改>
+→ 401 {"error":"Token 无效或已过期"}
+
+# 管理员
+POST ... {"username":"admin_li","password":"Admin@123"}
+→ 200 {"token":"...","user":{"id":2,"username":"admin_li","role":"ADMIN"}}
+```
+
+### 2.9 认证脚本
+
+```bash
+bash scripts/auth-test.sh
+```
+
+脚本共 10 项检查：登录成功、角色正确、错误密码 401、不存在用户 401、`/me` 验签、缺 Token 401、篡改签名 401、管理员登录与 `/me`、数据库哈希格式、经网关登录。结果示例：
+
+```text
+[PASS] 普通用户登录成功，返回三段式 JWT
+[PASS] 普通用户登录返回 role=USER
+[PASS] 错误密码返回 401
+[PASS] 不存在的用户返回 401
+[PASS] /me 验签通过，返回 username=student_zhang
+[PASS] 缺少 Authorization 返回 401
+[PASS] 篡改签名后返回 401
+[PASS] 管理员登录成功，返回 role=ADMIN
+[PASS] 管理员 /me 验签通过，role=ADMIN
+[PASS] student_zhang 存的是 BCrypt 哈希（$2a$，长度 60）
+[PASS] admin_li 存的是 BCrypt 哈希（$2a$，长度 60）
+[PASS] 密码列不含明文特征（@）
+[PASS] 经网关 8080 登录成功
+结果：PASS=13  FAIL=0
+```
+
+> 上面的条数与最终输出以脚本实际运行为准（脚本会按环境略有增减）。
+
+### 2.10 截图清单（提交 1–5 张）
+
+| # | 文件名建议 | 截图内容 |
+|---|---|---|
+| 1 | `auth-login-success.png` | Postman 或终端：`POST /api/auth/login`，200，返回 `token`、`role=USER` |
+| 2 | `auth-login-401.png` | 同一接口改成错误密码，401 与 `{"error":"用户名或密码错误"}` |
+| 3 | `auth-me.png` | `GET /api/auth/me` 带 Bearer Token，200 返回 `username/role` |
+| 4 | `auth-hash-db.png` | 数据库里 `users` 表的 `password_hash` 列，显示 `$2a$10$...`，证明没有明文 |
+| 5 | `auth-script.png` | `bash scripts/auth-test.sh` 的 `[PASS]` 输出与最后的 `PASS=13 FAIL=0` |
+
+截图保存到 `docs/homework/week-09/screenshots/`。
+
+### 2.11 与后续「鉴权规则」的衔接
+
+本项只做**认证**（登录、签发、验签、角色、密码哈希），**没有**在网关加拦截：现在业务接口仍可匿名访问。下一项「鉴权规则」会在网关加全局过滤器：
+
+- 无 Token 访问受保护路径 → 401；
+- Token 有效但角色不足（如普通用户调 `/api/admin/**`）→ 403；
+- 公开路径（`/api/health`、登录接口）放行。
+
+这样“未授权和越权能被阻止”才有可演示的证据；本项的 `/api/auth/me` 已经验证了验签代码本身是通的。

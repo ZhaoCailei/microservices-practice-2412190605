@@ -107,6 +107,13 @@ else
   bad "发布应返回 200，实际 $code: $body"
 fi
 
+# 要求响应是 JSON 且含约定的字段，而不是纯文本
+if printf '%s' "$body" | grep -q '"id"' && printf '%s' "$body" | grep -q '"message"'; then
+  ok "200 响应为 JSON，含 id 与 message 字段"
+else
+  bad "200 响应缺少 JSON 字段 id/message: $body"
+fi
+
 after_insert="$(count_rows)"
 if [ "${baseline:-x}" != "x" ] && [ "${after_insert:-x}" = "$((baseline + 1))" ]; then
   ok "行数 +1（$baseline → $after_insert）"
@@ -126,6 +133,12 @@ if [ "$code" = "400" ]; then
   ok "业务拒绝 (HTTP 400): $body"
 else
   bad "用户不存在应返回 400，实际 $code: $body"
+fi
+
+if printf '%s' "$body" | grep -q '"error"'; then
+  ok "400 响应为 JSON，含 error 字段"
+else
+  bad "400 响应缺少 error 字段: $body"
 fi
 
 after_reject="$(count_rows)"
@@ -157,6 +170,12 @@ if printf '%s' "$body" | grep -q "依赖服务不可用"; then
   ok "错误信息可读，未把调用失败当成业务成功"
 else
   bad "503 响应体缺少可读错误信息: $body"
+fi
+
+if printf '%s' "$body" | grep -q '"error"'; then
+  ok "503 响应为 JSON，含 error 字段"
+else
+  bad "503 响应缺少 error 字段: $body"
 fi
 
 after_down="$(count_rows)"

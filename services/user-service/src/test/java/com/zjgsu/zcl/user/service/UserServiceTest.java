@@ -23,7 +23,8 @@ import static org.junit.jupiter.api.Assertions.*;
         "spring.datasource.username=sa",
         "spring.datasource.password=",
         "spring.jpa.hibernate.ddl-auto=create-drop",
-        "spring.sql.init.mode=never"
+        "spring.sql.init.mode=never",
+        "app.jwt.secret=MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
 })
 @Transactional
 class UserServiceTest {

@@ -7,13 +7,6 @@ import java.util.Map;
 
 /**
  * 跨服务调用的门面：对上层只暴露 {@link #checkUserExists(Long)}，内部用 OpenFeign 声明式客户端。
- *
- * <p>与第七周手工寻址（DiscoveryClient + RestTemplate 自己拼 URI）相比：
- * <ul>
- *   <li>地址解析交给 Feign + LoadBalancer，代码里只写服务名；</li>
- *   <li>失败处理仍然集中在这里，不把 FeignException 泄漏给业务层。</li>
- * </ul>
- *
  * <p>失败语义：
  * <ul>
  *   <li>404（用户不存在）→ 返回 false，交给上层按原有业务语义返回 400；</li>
@@ -27,8 +20,6 @@ public class UserClient {
     /** 被调用的服务名，与 user-service 的 spring.application.name 一致 */
     public static final String USER_SERVICE_NAME = "user-service";
 
-    /** user-service 原有的业务路径 */
-    public static final String USER_PATH = "/api/users/{id}";
 
     private final UserServiceClient userServiceClient;
 
@@ -37,7 +28,7 @@ public class UserClient {
     }
 
     /**
-     * 校验用户是否存在。本次请求由 LoadBalancer 实时选实例，只取一个（本周不要求轮询/权重/重试）。
+     * 校验用户是否存在。本次请求由 LoadBalancer 实时选实例
      */
     public boolean checkUserExists(Long userId) {
         try {

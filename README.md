@@ -555,11 +555,11 @@ echo $?     # 0 = 全部通过
 
 ---
 
-# 第九周：API 网关（gateway-service）
+# 第九周：API 网关与认证服务
 
-大作业实践第一项：新增独立工程 `services/gateway-service`，把三个业务服务收拢到一个统一入口。JWT 认证与鉴权规则属于后续提交项，本章只记录网关部分。
+大作业实践前两项：新增独立工程 `services/gateway-service` 作为统一入口（第一项），并在 `user-service` 中实现登录、JWT 签发/验签、角色与密码哈希（第二项）。「鉴权规则」（网关拦截未授权/越权）属于第三项，本章暂不涉及。
 
-## 1. 工程与依赖
+## 1. 网关工程与依赖
 
 新增 `services/gateway-service/`（Spring Boot 4.1.2 + Java 25，与其它服务同一套 BOM）：
 
@@ -582,6 +582,10 @@ spring:
       server:
         webflux:
           routes:
+            - id: auth-service-route
+              uri: lb://user-service
+              predicates:
+                - Path=/api/auth/**
             - id: user-service-route
               uri: lb://user-service
               predicates:
@@ -598,6 +602,7 @@ spring:
 
 | 路由 | 匹配 | 目标 | 后端接口 |
 | --- | --- | --- | --- |
+| `auth-service-route` | `/api/auth/**` | `lb://user-service` | `POST /api/auth/login`、`GET /api/auth/me` |
 | `user-service-route` | `/api/users/**` | `lb://user-service` | `GET /api/users/{id}` |
 | `lost-service-route` | `/api/lost-items/**` | `lb://lost-service` | `POST /api/lost-items` |
 | `admin-service-route` | `/api/admin/**` | `lb://admin-service` | `GET/POST /api/admin/audits` |
@@ -628,9 +633,68 @@ curl -s -w "\nHTTP %{http_code}\n" -H "Content-Type: application/json" \
   http://localhost:8080/api/lost-items
 ```
 
-实测（2026-11-21）：三条路由经 8080 分别返回 200 / 200 / 200，响应体与直连后端一致；`userId=9999` 经网关返回 400 与原始业务错误；网关启动日志可见 `nacos registry, ZCL_GROUP gateway-service 172.19.0.10:8080 register finished`，说明网关本身也已注册到 Nacos。
+实测（2026-11-21）：三条业务路由经 8080 分别返回 200 / 200 / 200，响应体与直连后端一致；`userId=9999` 经网关返回 400 与原始业务错误；网关启动日志可见 `nacos registry, ZCL_GROUP gateway-service 172.19.0.10:8080 register finished`，说明网关本身也已注册到 Nacos。
 
-## 5. 文档与截图
+## 5. 认证服务（user-service）
+
+### 5.1 测试账号与角色
+
+| 用户名 | 演示密码 | 角色 | 说明 |
+| --- | --- | --- | --- |
+| `student_zhang` | `Student@123` | `USER` | 普通用户 |
+| `admin_li` | `Admin@123` | `ADMIN` | 管理员 |
+
+数据库只存 BCrypt 哈希（`password_hash`，`$2a$` 开头、长度 60），没有明文；演示密码只用于课堂验证。
+
+### 5.2 JWT 密钥
+
+密钥只从环境变量注入，仓库不保存。首次使用需要在本地 `.env` 里加一行（不会入库，`.env` 已被忽略）：
+
+```bash
+# 生成 32 字节随机密钥并写入 .env
+echo "JWT_SECRET=$(openssl rand -base64 32)" >> .env
+```
+
+`compose.yaml` 会把 `JWT_SECRET` 注入两个 `user-service` 实例；缺这个变量时服务启动失败并提示，不会用弱默认值。
+
+### 5.3 登录与验签
+
+```bash
+# 登录（可直连 8081，也可经网关 8080）
+curl -s -H "Content-Type: application/json" \
+  -d '{"username":"student_zhang","password":"Student@123"}' \
+  http://localhost:8080/api/auth/login
+
+# 成功返回：{"token":"eyJ...","tokenType":"Bearer","expiresIn":3600,"user":{"id":1,"username":"student_zhang","role":"USER"}}
+
+# 密码错误：401 {"error":"用户名或密码错误"}
+
+# 验签：带 Token 访问 /me
+curl -s -H "Authorization: Bearer <token>" http://localhost:8080/api/auth/me
+# 200 {"id":1,"username":"student_zhang","role":"USER"}
+
+# 无 Token / 篡改签名 / 过期：401
+```
+
+### 5.4 认证脚本
+
+```bash
+bash scripts/auth-test.sh     # 13 项断言，全 PASS 退出码为 0
+```
+
+覆盖：登录成功、角色、错误密码 401、不存在用户 401、`/me` 验签、缺 Token 401、篡改签名 401、管理员登录与 `/me`、数据库哈希格式、经网关登录。
+
+### 5.5 实现位置
+
+| 文件 | 作用 |
+| --- | --- |
+| `services/user-service/.../controller/AuthController.java` | `POST /api/auth/login`、`GET /api/auth/me` |
+| `services/user-service/.../service/AuthService.java` | 登录校验、签发、验签 |
+| `services/user-service/.../security/JwtTokenService.java` | JWT 签发与验签（claims：subject/username/role/iat/exp） |
+| `services/user-service/.../security/JwtConfig.java` | BCrypt、JwtEncoder、JwtDecoder Bean |
+| `services/user-service/src/main/resources/data.sql` | 两个账号的 BCrypt 哈希种子 |
+
+## 6. 文档与截图
 
 实现细节、验收点对照、截图清单见 [`docs/homework/week-09/index.md`](docs/homework/week-09/index.md)，截图保存到 [`docs/homework/week-09/screenshots/`](docs/homework/week-09/screenshots/)。
 

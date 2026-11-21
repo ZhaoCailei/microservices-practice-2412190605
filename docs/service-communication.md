@@ -24,7 +24,7 @@
    ▼
 [lost-service :8082]  LostItemController → LostItemService（@Transactional）
    │
-   │  ① 寻址：discoveryClient.getInstances("user-service")
+   │  ① 寻址：LoadBalancer 从注册中心取 user-service 实例列表（Feign 只写服务名）
    ├───────────────▶ [Nacos 3.2.4 · 命名空间 public / 分组 ZCL_GROUP]
    │                 ◀──── 当前实例列表：[172.x.x.x:8081]
    │
@@ -40,26 +40,26 @@
 [lost_db · lost_items]   只存 user_id，不建跨库外键
    │
    ▼
-[客户端] ◀── 200 发布成功，失物ID：n
+[客户端] ◀── 200 {"id":n,"message":"发布成功"}
 ```
 
 ### 2.2 一次调用的四步与三类结果
 
 ```text
 第 1 步  客户端 → lost-service     POST /api/lost-items
-第 2 步  lost-service → Nacos     getInstances("user-service")  → 实例列表
+第 2 步  lost-service → Nacos      LoadBalancer 查询 user-service 实例列表
 第 3 步  lost-service → user-service   GET /api/users/{id}（Feign 服务名 + LoadBalancer 选实例）
 第 4 步  按返回值分支：
-          200 → INSERT lost_items → 返回 200 发布成功，失物ID：n
-          404 → 返回 400 校验未通过（事务回滚，不写库）
-          实例为空 / 超时 / 5xx → 返回 503 依赖服务不可用（不写库）
+          200 → INSERT lost_items → 返回 200 {"id":n,"message":"发布成功"}
+          404 → 返回 400 {"error":"发布失败：用户 x 不存在…"}（事务回滚，不写库）
+          实例为空 / 超时 / 5xx → 返回 503 {"error":"依赖服务不可用：…"}（不写库）
 ```
 
 | 分支 | 触发条件 | 本服务响应 | 是否写库 |
 |---|---|---|---|
-| 成功 | 远端 200，用户存在 | 200 `发布成功，失物ID：n` | 是 |
-| 业务拒绝 | 远端 404，用户不存在 | 400 `校验未通过` | 否 |
-| 依赖故障 | 实例列表为空、超时、5xx | 503 `依赖服务不可用` | 否 |
+| 成功 | 远端 200，用户存在 | 200 `{"id":n,"message":"发布成功"}` | 是 |
+| 业务拒绝 | 远端 404，用户不存在 | 400 `{"error":"发布失败：用户 x 不存在…"}` | 否 |
+| 依赖故障 | 实例列表为空、超时、5xx | 503 `{"error":"依赖服务不可用：…"}` | 否 |
 
 ## 3. 调用方、被调用方与接口路径
 
@@ -83,6 +83,7 @@
    - 远端 `200` → 返回 `true`，继续发布。
 4. **事务边界**：校验发生在 `entityManager.persist()` 之前，整个方法在 `@Transactional` 内，失败不会产生半条记录。
 5. **数据边界**：`lost_items` 只存 `user_id`，不建跨库外键，也不直连 `user_db`。
+6. **响应格式**：三种结果统一返回 JSON——成功 `{"id":n,"message":"发布成功"}`，失败 `{"error":"…"}`；由 `LostItemController` 序列化，客户端和自动化脚本可按字段断言，而不是解析纯文本。
 
 ## 5. 完成情况
 
@@ -92,6 +93,7 @@
 | 服务名调用（不写死 IP） | 已完成 | 代码里没有 IP、没有端口，只有服务名与路径注解 |
 | 用户不存在时的业务拒绝 | 已完成 | 远端 404 → 本服务 400，不落库 |
 | 依赖不可用时的降级 | 已完成 | 无可用实例 / 连接失败 / 超时 → 503，不落库 |
+| 响应格式统一 JSON | 已完成 | 成功 `{"id","message"}`，失败 `{"error"}`；端到端脚本按字段断言 |
 | 单元测试 | 已完成 | `lost-service` 5 个用例，其中 `UserClientTest` 4 个：用户存在、404、对方 5xx、无实例 |
 | 轮询 / 权重 / 重试 / 熔断 | 未做 | 本周范围外，每次只选 1 个实例 |
 
@@ -102,11 +104,11 @@
 | # | 场景 | 请求 | 状态码 | 响应体 |
 |---|---|---|---|---|
 | 1 | 被调用方可用 | `GET /api/users/1` | 200 | 用户 JSON |
-| 2 | 正常发布 | `POST /api/lost-items`，`userId=1` | 200 | `发布成功，失物ID：6` |
-| 3 | 用户不存在 | 同上，`userId=9999` | 400 | `发布失败：用户 9999 不存在，无法发布失物` |
-| 4 | 依赖不可用 | 停掉 `user-service` 4 秒后再发 | 503 | `依赖服务不可用：调用 user-service 失败：无法连接到 user-service（注册中心无可用实例、连接失败或超时）` |
+| 2 | 正常发布 | `POST /api/lost-items`，`userId=1` | 200 | `{"id":6,"message":"发布成功"}` |
+| 3 | 用户不存在 | 同上，`userId=9999` | 400 | `{"error":"发布失败：用户 9999 不存在，无法发布失物"}` |
+| 4 | 依赖不可用 | 停掉 `user-service` 4 秒后再发 | 503 | `{"error":"依赖服务不可用：调用 user-service 失败：无法连接到 user-service（注册中心无可用实例、连接失败或超时）"}` |
 | 5 | 失败是否写库 | 停服期间查 `lost_items` | — | 6 行 → 6 行，**未写入** |
-| 6 | 恢复后发布 | 重启 `user-service` 后再发 | 200 | `发布成功，失物ID：7`，行数 6 → 7 |
+| 6 | 恢复后发布 | 重启 `user-service` 后再发 | 200 | `{"id":7,"message":"发布成功"}`，行数 6 → 7 |
 
 补充两个实测数字：`lost-service` 容器重建后健康接口约 **10.6 秒**才 `UP`；`user-service` 重启后约 **9.8 秒**恢复为可调用。也就是说，**健康检查通过 ≠ 已被调用方发现**。
 

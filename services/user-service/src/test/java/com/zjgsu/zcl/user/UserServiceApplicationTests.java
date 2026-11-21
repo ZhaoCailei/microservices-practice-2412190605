@@ -14,7 +14,9 @@ import org.springframework.boot.test.context.SpringBootTest;
         "spring.datasource.username=sa",
         "spring.datasource.password=",
         "spring.jpa.hibernate.ddl-auto=create-drop",
-        "spring.sql.init.mode=never"
+        "spring.sql.init.mode=never",
+        // 测试专用 JWT 密钥（32 个 0 的 Base64），不是生产密钥
+        "app.jwt.secret=MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
 })
 class UserServiceApplicationTests {
 

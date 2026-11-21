@@ -26,7 +26,7 @@
    │      无实例 / 超时 / 5xx → 返回 503，不写库
    │ ③ 校验通过才 INSERT
    ▼
-[lost_db · lost_items] ──▶ [客户端] 200 发布成功，失物ID：n
+[lost_db · lost_items] ──▶ [客户端] 200 {"id":n,"message":"发布成功"}
 ```
 
 完整版见 [`docs/service-communication.md`](../../service-communication.md)。
@@ -64,7 +64,7 @@ curl -s -w "\nHTTP %{http_code}\n" -H "Content-Type: application/json" \
   http://localhost:8082/api/lost-items
 
 # 依赖不可用
-docker compose stop user-service && sleep 4
+docker compose stop user-service user-service-b && sleep 4
 curl -s -w "\nHTTP %{http_code}\n" -H "Content-Type: application/json" \
   -d '{"itemName":"黑色折叠伞","feature":"伞柄贴有蓝色标签","userId":1}' \
   http://localhost:8082/api/lost-items
@@ -76,11 +76,11 @@ curl -s -w "\nHTTP %{http_code}\n" -H "Content-Type: application/json" \
 
 | # | 场景 | 状态码 | 返回 |
 |---|---|---|---|
-| 1 | 正常发布（`userId=1`） | 200 | `发布成功，失物ID：6` |
-| 2 | 用户不存在（`userId=9999`） | 400 | `发布失败：用户 9999 不存在，无法发布失物` |
-| 3 | 停掉 `user-service` 后再发 | 503 | `依赖服务不可用：调用 user-service 失败：无法连接到 user-service（注册中心无可用实例、连接失败或超时）` |
+| 1 | 正常发布（`userId=1`） | 200 | `{"id":6,"message":"发布成功"}` |
+| 2 | 用户不存在（`userId=9999`） | 400 | `{"error":"发布失败：用户 9999 不存在，无法发布失物"}` |
+| 3 | 停掉 `user-service` 后再发 | 503 | `{"error":"依赖服务不可用：调用 user-service 失败：无法连接到 user-service（注册中心无可用实例、连接失败或超时）"}` |
 | 4 | 停服期间统计 `lost_items` | — | 6 行 → 6 行，**未写入** |
-| 5 | 重启 `user-service` 后再发 | 200 | `发布成功，失物ID：7`，行数 6 → 7 |
+| 5 | 重启 `user-service` 后再发 | 200 | `{"id":7,"message":"发布成功"}`，行数 6 → 7 |
 
 补充：`lost-service` 容器重建后健康接口约 10.6 秒 `UP`；`user-service` 重启后约 9.8 秒恢复到可调用。**健康检查通过不等于已在注册中心可被发现**。
 
@@ -152,13 +152,15 @@ public boolean checkUserExists(Long userId) {
 }
 ```
 
-三种结果对应控制器三种响应：
+三种结果对应控制器三种响应（**统一 JSON**，`LostItemController` 用 `LinkedHashMap` 序列化，字段顺序固定）：
 
-| 情况 | 异常 | 响应 |
-|---|---|---|
-| 用户存在 | 无 | 200 `发布成功，失物ID：n` |
-| 用户不存在 | `FeignException.NotFound` | 400 `发布失败：用户 x 不存在` |
-| 依赖不可用 | `UserServiceUnavailableException` | 503 `依赖服务不可用：调用 user-service 失败：…` |
+| 情况 | 异常 | 状态码 | 响应体 |
+|---|---|---|---|
+| 用户存在 | 无 | 200 | `{"id": n, "message": "发布成功"}` |
+| 用户不存在 | `FeignException.NotFound` | 400 | `{"error": "发布失败：用户 x 不存在，无法发布失物"}` |
+| 依赖不可用 | `UserServiceUnavailableException` | 503 | `{"error": "依赖服务不可用：调用 user-service 失败：…"}` |
+
+字段约定：成功用 `id` + `message`；失败统一用 `error`，便于调用方与自动化脚本按字段断言，而不是解析纯文本。
 
 超时配置（`application.yml`）：
 
@@ -174,6 +176,8 @@ spring:
 ```
 
 ### 2.4 与第七周的差别
+
+> 下表只是**与第七周做对比**，说明“哪些旧代码已经删掉”；当前实现以 2.1–2.3 的 Feign 代码为准，仓库里不再有 `DiscoveryClient` 手工寻址代码。
 
 | 项 | 第七周（手工寻址） | 第八周（OpenFeign） |
 |---|---|---|
@@ -194,26 +198,58 @@ curl -s -w "\nHTTP %{http_code}\n" -H "Content-Type: application/json" \
   -d '{"itemName":"黑色折叠伞","feature":"伞柄贴有蓝色标签","userId":1}' \
   http://localhost:8082/api/lost-items
 
-# 3) 失败处理：停掉被调用方，应返回 503 与可读错误
-docker compose stop user-service && sleep 4
+# 3) 失败处理：停掉被调用方全部实例，应返回 503 与可读错误
+docker compose stop user-service user-service-b && sleep 4
 curl -s -w "\nHTTP %{http_code}\n" -H "Content-Type: application/json" \
   -d '{"itemName":"黑色折叠伞","feature":"伞柄贴有蓝色标签","userId":1}' \
   http://localhost:8082/api/lost-items
 
 # 4) 恢复
-docker compose start user-service
+docker compose start user-service user-service-b
 ```
 
 ### 2.6 结果
 
 - `./mvnw test`：**Tests run: 5, Failures: 0, Errors: 0**（`UserClientTest` 4 个 + 上下文 1 个）；
-- 正常调用：**200**，`发布成功，失物ID：6`；
-- 停掉 `user-service`：**503**，`依赖服务不可用：调用 user-service 失败：无法连接到 user-service（注册中心无可用实例、连接失败或超时）`；
+- 正常调用：**200**，`{"id":6,"message":"发布成功"}`；
+- 停掉 `user-service`：**503**，`{"error":"依赖服务不可用：调用 user-service 失败：无法连接到 user-service（注册中心无可用实例、连接失败或超时）"}`；
 - 停服期间 `lost_items` 行数不变（6 → 6），未写库；
-- 重启后：**200**，`发布成功，失物ID：7`，行数 6 → 7；
+- 重启后：**200**，`{"id":7,"message":"发布成功"}`，行数 6 → 7；
 - 冒烟脚本 `scripts/smoke-test.sh`：4 项全部 PASS。
 
 截图见 [`screenshots/`](screenshots/)。
+
+### 2.7 响应格式（JSON 契约）
+
+三种分支统一返回 JSON（`Content-Type: application/json`），由 `LostItemController` 用 `LinkedHashMap` 序列化，字段顺序固定：
+
+| 场景 | 状态码 | 响应体 |
+|---|---|---|
+| 发布成功 | 200 | `{"id":51,"message":"发布成功"}` |
+| 用户不存在 | 400 | `{"error":"发布失败：用户 9999 不存在，无法发布失物"}` |
+| 依赖不可用 | 503 | `{"error":"依赖服务不可用：调用 user-service 失败：…"}` |
+
+- 成功用 `id`（新失物主键）+ `message`；失败统一用 `error`；
+- HTTP 状态码与语义一致：业务拒绝 400、依赖故障 503；
+- 端到端脚本按 `"id"` / `"error"` 字段断言，不再比对整段纯文本。
+
+实测（2026-11-20，`lost-service` 重建后）：
+
+```text
+$ curl -s -w "\nHTTP %{http_code}\n" -H "Content-Type: application/json" \
+    -d '{"itemName":"e2e-item","feature":"e2e-feature","userId":1}' \
+    http://localhost:8082/api/lost-items
+{"id":51,"message":"发布成功"}
+HTTP 200
+
+$ curl -s -w "\nHTTP %{http_code}\n" -H "Content-Type: application/json" \
+    -d '{"itemName":"e2e-item","feature":"e2e-feature","userId":9999}' \
+    http://localhost:8082/api/lost-items
+{"error":"发布失败：用户 9999 不存在，无法发布失物"}
+HTTP 400
+```
+
+响应格式归一后，前端/调用方可以统一按 JSON 解析；失败时读 `error` 字段展示，成功时读 `id` 继续后续流程。
 
 ---
 
@@ -299,10 +335,10 @@ user-service-1   | instance=user-service-1   本实例第 3 次查询，userId=1
 | 步骤 | 操作 | 断言 |
 |---|---|---|
 | 1 | 检查 Nacos 控制台 + 三服务 `/actuator/health` | 全部可达 |
-| 2 | `POST /api/lost-items`（合法 `userId`） | **200**，`lost_items` 行数 **+1** |
-| 3 | `POST /api/lost-items`（`userId=9999`） | **400**，响应含“不存在”，行数 **不变** |
-| 4 | 停掉 `user-service` 与 `user-service-b`，再发同一条 | **503**，响应含“依赖服务不可用”，行数 **不变** |
-| 5 | 重新启动两个实例，轮询等待 | 自动恢复 **200**，行数再 **+1** |
+| 2 | `POST /api/lost-items`（合法 `userId`） | **200**，响应含 `id` 与 `message` 字段，`lost_items` 行数 **+1** |
+| 3 | `POST /api/lost-items`（`userId=9999`） | **400**，响应含 `error` 字段且信息含“不存在”，行数 **不变** |
+| 4 | 停掉 `user-service` 与 `user-service-b`，再发同一条 | **503**，响应含 `error` 字段且信息含“依赖服务不可用”，行数 **不变** |
+| 5 | 重新启动两个实例，轮询等待 | 自动恢复 **200**，响应含 `id`，行数再 **+1** |
 
 要点：
 
@@ -317,38 +353,50 @@ bash scripts/e2e-test.sh          # Git Bash / macOS / Linux
 echo $?                            # 0 = 全部通过；非 0 = 有断言失败
 ```
 
-实测输出（2026-11-15）：
+实测输出（2026-11-20，响应改为 JSON 后重跑）：
 
 ```text
+============================================================
+ 跨服务业务流程端到端验证：发布失物前校验发布者
+============================================================
 1. 环境检查（Nacos 控制台 + 三个服务健康接口）
   [PASS] Nacos 控制台可访问 (http://localhost:18080)
   [PASS] user-service 健康接口正常 (http://localhost:8081)
   [PASS] lost-service 健康接口正常 (http://localhost:8082)
   [PASS] admin-service 健康接口正常 (http://localhost:8083)
 2. 正常发布：应 200，且 lost_items 行数 +1
-  [PASS] 发布成功 (HTTP 200): 发布成功，失物ID：26
-  [PASS] 行数 +1（25 → 26）
+  发布前 lost_items 行数: 50
+  [PASS] 发布成功 (HTTP 200): {"id":51,"message":"发布成功"}
+  [PASS] 200 响应为 JSON，含 id 与 message 字段
+  [PASS] 行数 +1（50 → 51）
 3. 用户不存在：应 400，且不落库
-  [PASS] 业务拒绝 (HTTP 400): 发布失败：用户 9999 不存在，无法发布失物
-  [PASS] 未写库（行数保持 26）
+  [PASS] 业务拒绝 (HTTP 400): {"error":"发布失败：用户 9999 不存在，无法发布失物"}
+  [PASS] 400 响应为 JSON，含 error 字段
+  [PASS] 未写库（行数保持 51）
 4. 模拟依赖不可用：停掉 user-service 全部实例，应 503 且不落库
-  [PASS] 依赖不可用 (HTTP 503): 依赖服务不可用：调用 user-service 失败：无法连接到 user-service（注册中心无可用实例、连接失败或超时）
+  停止 user-service / user-service-b ...
+  [PASS] 依赖不可用 (HTTP 503): {"error":"依赖服务不可用：调用 user-service 失败：无法连接到 user-service（注册中心无可用实例、连接失败或超时）"}
   [PASS] 错误信息可读，未把调用失败当成业务成功
-  [PASS] 失败期间未写库（行数保持 26）
+  [PASS] 503 响应为 JSON，含 error 字段
+  [PASS] 失败期间未写库（行数保持 51）
 5. 恢复依赖后：应自动恢复 200，且行数再 +1
-  [PASS] 恢复成功 (HTTP 200): 发布成功，失物ID：27
-  [PASS] 恢复后行数 +1（26 → 27）
-
-结果：PASS=13  FAIL=0
+  已启动 user-service / user-service-b，等待可调用（最多 60 秒）...
+  [PASS] 恢复成功 (HTTP 200): {"id":52,"message":"发布成功"}
+  [PASS] 恢复后行数 +1（51 → 52）
+============================================================
+ 结果：PASS=16  FAIL=0
+============================================================
 端到端验证全部通过
 ```
+
+断言从 13 项增加到 **16 项**：新增的 3 项分别检查 200/400/503 响应是否为 JSON 且包含约定字段。
 
 （脚本首次编写时确实失败过：Git Bash 把中文命令行参数转成 GBK，服务端 JSON 解析报 `Invalid UTF-8`，7 项断言 FAIL、退出码 1。这也验证了“失败会返回非 0”。修复办法：请求体保持纯 ASCII，注释写在脚本里。）
 
 ### 4.4 模拟依赖不可用：为什么不会把失败当成成功
 
 - 校验是**读操作**：`user-service` 不可用时，`lost-service` 抛出 `UserServiceUnavailableException`，控制器返回 **503**，事务未提交，`lost_items` 行数不变；
-- 断言里同时检查**状态码**、**响应体可读性**、**数据库行数**三个证据，而不是只看 HTTP 200/非 200；
+- 断言里同时检查**状态码**、**响应体 JSON 字段**（`id` / `error`）、**数据库行数**三个证据，而不是只看 HTTP 200/非 200；
 - 若只看“请求没报错”就认为发布成功，就会写出“失物挂在不存在用户下”的脏数据——这正是本项要排除的情况。
 
 ### 4.5 写操作超时后，结果可能未知

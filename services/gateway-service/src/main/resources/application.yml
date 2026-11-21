@@ -18,6 +18,11 @@ spring:
       server:
         webflux:
           routes:
+            # 0) 认证服务：登录签发 JWT、/api/auth/me 验签（同属 user-service）
+            - id: auth-service-route
+              uri: lb://user-service
+              predicates:
+                - Path=/api/auth/**
             # 1) 用户服务：GET /api/users/{id}
             - id: user-service-route
               uri: lb://user-service
