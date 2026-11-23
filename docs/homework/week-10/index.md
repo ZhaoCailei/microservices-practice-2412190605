@@ -209,17 +209,19 @@ curl -s http://localhost:8082/api/lost-items/config
 [PASS] lost-service 读到 dev 配置：feignRead=3000, pool=3
 --- 动态修改 dev 配置：jwt=7200, pool=6, log=DEBUG ---
 [PASS] 配置变更后 1s 内服务生效（jwt=7200, pool=6），未重启
-[PASS] 容器启动时间未变（2026-11-23T07:44:16.476450494Z），确认是热刷新而非重启
+[PASS] 容器启动时间未变（2026-11-23T09:16:23.08329497Z），确认是热刷新而非重启
 [PASS] 日志级别随配置刷新为 DEBUG
+[PASS] 登录返回 expiresIn=7200，JWT 有效期（业务参数）随配置生效
 --- 还原 dev 配置 ---
 [PASS] 还原配置后 1s 内回到 jwt=3600, pool=5
+[PASS] 还原后登录 expiresIn=3600，业务参数回到默认
 --- 切换到 test 环境（NACOS_CONFIG_NAMESPACE=zcl-test）---
-[PASS] 切到 test namespace 后 9s 内生效（jwt=1800, pool=8）
+[PASS] 切到 test namespace 后 8s 内生效（jwt=1800, pool=8）
 --- 切回 dev 环境 ---
 [PASS] 切回 dev namespace 后 9s 内恢复（jwt=3600, pool=5）
 [PASS] Nacos 配置里没有密码/签名密钥等敏感项
 
-结果：PASS=14  FAIL=0
+结果：PASS=16  FAIL=0
 ```
 
 要点：
@@ -330,7 +332,7 @@ GET http://localhost:8081/api/users/config
 {"jwtExpirationSeconds":1800,"poolSize":8,"logLevel":"DEBUG","source":"nacos:user-service.yaml"}
 ```
 
-整体脚本 14 项断言全部通过（`PASS=14 FAIL=0`），其中 2 项就是环境切换。
+整体脚本 16 项断言全部通过（`PASS=16 FAIL=0`），其中 2 项就是环境切换。
 
 ### 2.4 截图清单（提交 1–3 张）
 
@@ -348,6 +350,109 @@ GET http://localhost:8081/api/users/config
 |---|---|
 | 配置台账 | [`docs/configuration.md`](../../configuration.md)：Data ID、Group、用途、dev/test 值 |
 | 多环境实现 | 4 个服务的 `spring.config.import` + `NACOS_CONFIG_NAMESPACE` 切换 |
-| 验证脚本 | `scripts/config-test.sh`（14 项断言，含切换） |
+| 验证脚本 | `scripts/config-test.sh`（16 项断言，含切换） |
 | 文档 | 本文件 §2（设计、命令、结果） |
 | 截图 | §2.4 |
+
+## 3. 动态配置验证
+
+### 3.1 选哪些配置来观察
+
+| 配置项 | 类型 | 观察方式 | 是否热更新 |
+|---|---|---|---|
+| `app.jwt.expiration-seconds` | 业务参数（Token 有效期） | 登录接口返回的 `expiresIn` 从 3600 变 7200 | 是（`@RefreshScope`） |
+| `app.demo.pool-size` | 演示业务参数 | `GET /api/users/config` 的 `poolSize` | 是（`@RefreshScope`） |
+| `logging.level.com.zjgsu.zcl.user` | 日志级别 | 端点的 `logLevel`、实际日志输出 | 是（`LoggingRebinder`） |
+| Feign 超时 | 启动期参数 | — | 否（需重建 Feign 客户端，故不作为动态验证项） |
+
+关键点：**不是所有配置都能热更新**。本项目特意把“能动态观察”的（JWT 有效期、业务参数、日志级别）和“启动期才生效”的（Feign 超时）分开说明，避免夸大。
+
+### 3.2 实现思路
+
+```text
+Nacos 控制台/脚本修改 user-service.yaml
+        │  Nacos 客户端长轮询收到变更
+        ▼
+Spring Cloud RefreshEvent（refreshEnabled=true）
+        │
+        ├── @RefreshScope Bean 重建 → 重新注入 @Value
+        │      ├── ConfigDemoController（pool-size、jwt 展示值）
+        │      └── JwtTokenService（JWT 有效期 → 登录 expiresIn 变化）
+        └── LoggingRebinder → logging.level.* 重新设置
+```
+
+- 代码：`ConfigDemoController`（`@RefreshScope`）与 `JwtTokenService`（`@RefreshScope`，本次新增）；
+- 观察证据 1：`GET /api/users/config` 的 `jwtExpirationSeconds`、`poolSize`、`logLevel`；
+- 观察证据 2：`POST /api/auth/login` 返回的 `expiresIn` 随配置变化（业务行为变化）；
+- 观察证据 3：`docker inspect` 的 `State.StartedAt` 前后一致 → **没有重启**，也没有重新打包镜像；
+- 还原：脚本改回原值并再次断言 `expiresIn=3600`，保证环境干净。
+
+### 3.3 运行命令
+
+```bash
+# 一键验证（改配置 → 等待生效 → 断言 → 还原 → 环境切换）
+bash scripts/config-test.sh
+```
+
+手工演示（Git Bash）：
+
+```bash
+# 1) 当前值
+curl -s http://localhost:8081/api/users/config
+# 2) 在 Nacos 控制台（namespace=zcl-dev）把 user-service.yaml 的
+#    app.jwt.expiration-seconds 从 3600 改成 7200，点“发布”
+# 3) 1~2 秒后再看，无需重启
+curl -s http://localhost:8081/api/users/config
+
+# 4) 业务侧证据：登录返回的 expiresIn
+curl -s -H "Content-Type: application/json" \
+  -d '{"username":"student_zhang","password":"Student@123"}' \
+  http://localhost:8081/api/auth/login
+
+# 5) 证明没重启（StartedAt 前后不变）
+docker inspect -f '{{.State.StartedAt}}' microservices-practice-2412190605-user-service-1
+```
+
+### 3.4 结果（2026-11-23）
+
+```text
+--- 动态修改 dev 配置：jwt=7200, pool=6, log=DEBUG ---
+[PASS] 配置变更后 1s 内服务生效（jwt=7200, pool=6），未重启
+[PASS] 容器启动时间未变（2026-11-23T09:16:23.08329497Z），确认是热刷新而非重启
+[PASS] 日志级别随配置刷新为 DEBUG
+[PASS] 登录返回 expiresIn=7200，JWT 有效期（业务参数）随配置生效
+--- 还原 dev 配置 ---
+[PASS] 还原配置后 1s 内回到 jwt=3600, pool=5
+[PASS] 还原后登录 expiresIn=3600，业务参数回到默认
+```
+
+对照：
+
+| 时刻 | `/api/users/config` | 登录 `expiresIn` |
+|---|---|---|
+| 修改前 | `jwtExpirationSeconds=3600`，`poolSize=5`，`INFO` | 3600 |
+| 修改后（1s） | `jwtExpirationSeconds=7200`，`poolSize=6`，`DEBUG` | 7200 |
+| 还原后（1s） | `jwtExpirationSeconds=3600`，`poolSize=5`，`INFO` | 3600 |
+
+整个脚本 16 项断言全部通过（`PASS=16 FAIL=0`），其中 6 项直接对应动态刷新。
+
+### 3.5 截图清单（提交 1–3 张）
+
+| # | 文件名建议 | 截图内容 |
+|---|---|---|
+| 1 | `dynamic-before-after.png` | 左：Nacos 控制台里 `expiration-seconds` 为 3600；右：改成 7200 后 `curl /api/users/config` 返回 7200（或登录返回 `expiresIn: 7200`） |
+| 2 | `dynamic-log-level.png` | 同一次修改后端点返回 `"logLevel":"DEBUG"`（日志级别也热更新） |
+| 3 | `dynamic-test-output.png` | `bash scripts/config-test.sh` 输出中动态刷新那几行 `[PASS]` 与 `PASS=16 FAIL=0` |
+
+保存到 `docs/homework/week-10/screenshots/`。
+
+> 做完手工演示后执行 `bash scripts/config-setup.sh` 还原配置，或直接跑一次 `config-test.sh`（它会自动还原）。
+
+### 3.6 提交清单
+
+| 项 | 位置 |
+|---|---|
+| 动态配置代码 | `@RefreshScope`：`ConfigDemoController`、`JwtTokenService` |
+| 验证脚本 | `scripts/config-test.sh`（改配置 → 轮询 → 断言 → 还原） |
+| 文档 | 本文件 §3（实现思路、运行命令、结果） |
+| 截图 | §3.5 |

@@ -1,4 +1,4 @@
-# 配置清单（Nacos Data ID / Group / 用途）
+﻿# 配置清单（Nacos Data ID / Group / 用途）
 
 > 第十周「多环境配置」的配置台账：每条 Data ID 记录 Group、所属环境、用途与关键值。
 > 实现细节与验收结果见 [`docs/homework/week-10/index.md`](homework/week-10/index.md)。
@@ -68,4 +68,4 @@ curl -s http://localhost:8081/api/users/config
 # test → {"jwtExpirationSeconds":1800,"poolSize":8,"logLevel":"DEBUG",...}
 ```
 
-`scripts/config-test.sh` 末尾会自动执行一次“切到 test 再切回 dev”的验证，共 14 项断言。
+`scripts/config-test.sh` 末尾会自动执行一次“切到 test 再切回 dev”的验证，共 16 项断言。

@@ -2,6 +2,7 @@ package com.zjgsu.zcl.user.security;
 
 import com.zjgsu.zcl.user.model.User;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cloud.context.config.annotation.RefreshScope;
 import org.springframework.security.oauth2.jwt.*;
 import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
 import org.springframework.stereotype.Service;
@@ -17,7 +18,11 @@ import java.time.Instant;
  *   <li>验签：由 {@link JwtDecoder} 校验签名与过期时间，任何篡改都会抛异常。</li>
  * </ul>
  * 密钥不写在代码里，由 {@link JwtConfig} 从环境变量 {@code JWT_SECRET} 读取。
+ *
+ * <p>加 {@code @RefreshScope}：Nacos 里改 {@code app.jwt.expiration-seconds} 后，
+ * 本 Bean 会重建并读取新值，下一次登录返回的 {@code expiresIn} 随之变化（无需重启）。
  */
+@RefreshScope
 @Service
 public class JwtTokenService {
 

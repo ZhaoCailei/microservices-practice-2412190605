@@ -1,4 +1,4 @@
-
+﻿
 
 # 校园失物招领系统
 
@@ -844,7 +844,7 @@ NACOS_CONFIG_NAMESPACE=zcl-test docker compose up -d
 ```bash
 bash scripts/config-setup.sh     # 创建 namespace + 发布 8 份配置
 docker compose up -d --build     # 重建服务
-bash scripts/config-test.sh      # 14 项断言
+bash scripts/config-test.sh      # 16 项断言
 ```
 
 实测（2026-11-23）：`PASS=14 FAIL=0`，覆盖 dev/test 配置存在且值不同、服务读到配置、动态刷新（1s、未重启）、日志级别刷新、环境切换（切 test 9s 生效、切回 dev 9s 恢复）、`.env` 未入库、配置内容无敏感项。

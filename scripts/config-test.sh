@@ -149,7 +149,17 @@ else
   fail "日志级别未刷新：$NEW_JSON"
 fi
 
-# 8) 还原 dev 配置并确认还原生效
+# 8) 业务参数也随配置变化：登录返回的 expiresIn 由 3600 变 7200（无需重启）
+LOGIN_NEW=$(curl -s -H "Content-Type: application/json" \
+  -d '{"username":"student_zhang","password":"Student@123"}' "$USER_URL/api/auth/login")
+EXPIRES_NEW=$(echo "$LOGIN_NEW" | sed -n 's/.*"expiresIn":\([0-9]*\).*/\1/p')
+if [ "$EXPIRES_NEW" = "7200" ]; then
+  pass "登录返回 expiresIn=7200，JWT 有效期（业务参数）随配置生效"
+else
+  fail "登录返回 expiresIn=$EXPIRES_NEW，应为 7200"
+fi
+
+# 9) 还原 dev 配置并确认还原生效
 echo "--- 还原 dev 配置 ---"
 RESTORE='app:
   jwt:
@@ -174,6 +184,16 @@ if [ -n "$RESTORED" ]; then
   pass "还原配置后 ${RESTORED}s 内回到 jwt=3600, pool=5"
 else
   fail "配置未能还原：$(curl -s "$USER_URL/api/users/config")"
+fi
+
+# 还原后再次登录，expiresIn 回到 3600
+LOGIN_BACK=$(curl -s -H "Content-Type: application/json" \
+  -d '{"username":"student_zhang","password":"Student@123"}' "$USER_URL/api/auth/login")
+EXPIRES_BACK=$(echo "$LOGIN_BACK" | sed -n 's/.*"expiresIn":\([0-9]*\).*/\1/p')
+if [ "$EXPIRES_BACK" = "3600" ]; then
+  pass "还原后登录 expiresIn=3600，业务参数回到默认"
+else
+  fail "还原后登录 expiresIn=$EXPIRES_BACK，应为 3600"
 fi
 
 # 9) 多环境切换：切到 test namespace（值不同）再切回 dev
