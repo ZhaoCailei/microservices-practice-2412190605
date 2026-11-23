@@ -176,7 +176,42 @@ else
   fail "配置未能还原：$(curl -s "$USER_URL/api/users/config")"
 fi
 
-# 9) 配置内容里没有密钥/密码
+# 9) 多环境切换：切到 test namespace（值不同）再切回 dev
+echo "--- 切换到 test 环境（NACOS_CONFIG_NAMESPACE=$TEST_NS）---"
+NACOS_CONFIG_NAMESPACE="$TEST_NS" docker compose up -d user-service user-service-b >/dev/null 2>&1
+SWITCHED=""
+for i in $(seq 1 60); do
+  sleep 1
+  T_JSON=$(curl -s "$USER_URL/api/users/config")
+  if echo "$T_JSON" | grep -q '"jwtExpirationSeconds":1800' && echo "$T_JSON" | grep -q '"poolSize":8'; then
+    SWITCHED="$i"
+    break
+  fi
+done
+if [ -n "$SWITCHED" ]; then
+  pass "切到 test namespace 后 ${SWITCHED}s 内生效（jwt=1800, pool=8）"
+else
+  fail "切到 test 环境后仍未生效：$(curl -s "$USER_URL/api/users/config")"
+fi
+
+echo "--- 切回 dev 环境 ---"
+NACOS_CONFIG_NAMESPACE="$DEV_NS" docker compose up -d user-service user-service-b >/dev/null 2>&1
+SWITCH_BACK=""
+for i in $(seq 1 60); do
+  sleep 1
+  B_JSON=$(curl -s "$USER_URL/api/users/config")
+  if echo "$B_JSON" | grep -q '"jwtExpirationSeconds":3600' && echo "$B_JSON" | grep -q '"poolSize":5'; then
+    SWITCH_BACK="$i"
+    break
+  fi
+done
+if [ -n "$SWITCH_BACK" ]; then
+  pass "切回 dev namespace 后 ${SWITCH_BACK}s 内恢复（jwt=3600, pool=5）"
+else
+  fail "切回 dev 后仍未恢复：$(curl -s "$USER_URL/api/users/config")"
+fi
+
+# 10) 配置内容里没有密钥/密码
 SECRET_HIT=""
 for ns in "$DEV_NS" "$TEST_NS"; do
   for data_id in user-service.yaml lost-service.yaml admin-service.yaml gateway-service.yaml; do

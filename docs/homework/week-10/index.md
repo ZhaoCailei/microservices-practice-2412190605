@@ -213,9 +213,13 @@ curl -s http://localhost:8082/api/lost-items/config
 [PASS] 日志级别随配置刷新为 DEBUG
 --- 还原 dev 配置 ---
 [PASS] 还原配置后 1s 内回到 jwt=3600, pool=5
+--- 切换到 test 环境（NACOS_CONFIG_NAMESPACE=zcl-test）---
+[PASS] 切到 test namespace 后 9s 内生效（jwt=1800, pool=8）
+--- 切回 dev 环境 ---
+[PASS] 切回 dev namespace 后 9s 内恢复（jwt=3600, pool=5）
 [PASS] Nacos 配置里没有密码/签名密钥等敏感项
 
-结果：PASS=12  FAIL=0
+结果：PASS=14  FAIL=0
 ```
 
 要点：
@@ -257,3 +261,93 @@ GET http://localhost:8082/api/lost-items/config
 | 验证脚本 | `scripts/config-test.sh` |
 | 文档 | 本文件 + `README` 第十周章节 |
 | 密钥 | 只在 `.env`，不入库 |
+
+## 2. 多环境配置
+
+### 2.1 设计思路
+
+要求“至少两个环境：`dev` 本地开发、`test` 自动测试或演示”。本项目用 **Nacos namespace 隔离**，而不是复制多套代码或镜像：
+
+```text
+同一份代码 / 同一份镜像
+        │
+        ├── NACOS_CONFIG_NAMESPACE=zcl-dev  → dev 配置（本地开发，少噪音）
+        └── NACOS_CONFIG_NAMESPACE=zcl-test → test 配置（自动测试/演示，DEBUG、更短有效期）
+```
+
+设计要点：
+
+1. **配置键完全相同，值不同**：4 个 Data ID 在 dev/test 各一份，服务代码不区分环境；
+2. **切换只改一个环境变量**：`NACOS_CONFIG_NAMESPACE`，不重建镜像、不改代码；
+3. **环境边界可观察**：dev 的 `jwt=3600/pool=5/INFO`，test 的 `jwt=1800/pool=8/DEBUG`，脚本能断言两边值不同；
+4. **配置台账**：每个 Data ID、Group、用途与两套值记录在 [`docs/configuration.md`](../../configuration.md)。
+
+### 2.2 运行命令
+
+```bash
+# 开发环境（compose 默认，.env 中 NACOS_CONFIG_NAMESPACE=zcl-dev）
+docker compose up -d
+
+# 测试环境：只换 namespace
+NACOS_CONFIG_NAMESPACE=zcl-test docker compose up -d
+
+# 切回开发
+docker compose up -d
+
+# 一键验证（含环境切换）
+bash scripts/config-test.sh
+```
+
+### 2.3 实测结果（2026-11-23）
+
+环境切换实测：切到 `zcl-test` 后 9 秒内服务读到 test 值，切回 `zcl-dev` 后 9 秒内恢复：
+
+```text
+--- 切换到 test 环境（NACOS_CONFIG_NAMESPACE=zcl-test）---
+[PASS] 切到 test namespace 后 9s 内生效（jwt=1800, pool=8）
+--- 切回 dev 环境 ---
+[PASS] 切回 dev namespace 后 9s 内恢复（jwt=3600, pool=5）
+```
+
+两套值对照：
+
+| 配置 | dev | test |
+|---|---|---|
+| `app.jwt.expiration-seconds` | 3600 | 1800 |
+| `app.demo.pool-size` | 5 | 8 |
+| `logging.level.com.zjgsu.zcl.user` | INFO | DEBUG |
+| Feign connect/read timeout | 3000/3000 | 2000/2000 |
+
+接口实测：
+
+```text
+# dev 环境
+GET http://localhost:8081/api/users/config
+{"jwtExpirationSeconds":3600,"poolSize":5,"logLevel":"INFO","source":"nacos:user-service.yaml"}
+
+# 切到 test 环境后
+GET http://localhost:8081/api/users/config
+{"jwtExpirationSeconds":1800,"poolSize":8,"logLevel":"DEBUG","source":"nacos:user-service.yaml"}
+```
+
+整体脚本 14 项断言全部通过（`PASS=14 FAIL=0`），其中 2 项就是环境切换。
+
+### 2.4 截图清单（提交 1–3 张）
+
+| # | 文件名建议 | 截图内容 |
+|---|---|---|
+| 1 | `env-dev-config.png` | Nacos 控制台，namespace=`zcl-dev`，`user-service.yaml` 内容（3600/5/INFO） |
+| 2 | `env-test-config.png` | Nacos 控制台，namespace=`zcl-test`，同一 Data ID 内容（1800/8/DEBUG） |
+| 3 | `env-switch.png` | 终端：切到 test 后 `curl /api/users/config` 返回 1800/8/DEBUG，再切回 dev 返回 3600/5/INFO |
+
+保存到 `docs/homework/week-10/screenshots/`。
+
+### 2.5 提交清单
+
+| 项 | 位置 |
+|---|---|
+| 配置台账 | [`docs/configuration.md`](../../configuration.md)：Data ID、Group、用途、dev/test 值 |
+| 多环境实现 | 4 个服务的 `spring.config.import` + `NACOS_CONFIG_NAMESPACE` 切换 |
+| 验证脚本 | `scripts/config-test.sh`（14 项断言，含切换） |
+| 文档 | 本文件 §2（设计、命令、结果） |
+| 截图 | §2.4 |

@@ -844,13 +844,13 @@ NACOS_CONFIG_NAMESPACE=zcl-test docker compose up -d
 ```bash
 bash scripts/config-setup.sh     # 创建 namespace + 发布 8 份配置
 docker compose up -d --build     # 重建服务
-bash scripts/config-test.sh      # 12 项断言
+bash scripts/config-test.sh      # 14 项断言
 ```
 
-实测（2026-11-23）：`PASS=12 FAIL=0`，覆盖 dev/test 配置存在且值不同、服务读到配置、动态刷新（1s、未重启）、日志级别刷新、`.env` 未入库、配置内容无敏感项。
+实测（2026-11-23）：`PASS=14 FAIL=0`，覆盖 dev/test 配置存在且值不同、服务读到配置、动态刷新（1s、未重启）、日志级别刷新、环境切换（切 test 9s 生效、切回 dev 9s 恢复）、`.env` 未入库、配置内容无敏感项。
 
 ## 7. 文档与截图
 
-配置中心说明见 [`docs/config-center.md`](docs/config-center.md)，验收对照与截图清单见 [`docs/homework/week-10/index.md`](docs/homework/week-10/index.md)，截图保存到 [`docs/homework/week-10/screenshots/`](docs/homework/week-10/screenshots/)。
+配置中心说明见 [`docs/config-center.md`](docs/config-center.md)，配置台账（Data ID / Group / 用途）见 [`docs/configuration.md`](docs/configuration.md)，验收对照与截图清单见 [`docs/homework/week-10/index.md`](docs/homework/week-10/index.md)，截图保存到 [`docs/homework/week-10/screenshots/`](docs/homework/week-10/screenshots/)。
 
 
