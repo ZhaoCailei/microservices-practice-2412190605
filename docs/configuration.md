@@ -68,4 +68,4 @@ curl -s http://localhost:8081/api/users/config
 # test → {"jwtExpirationSeconds":1800,"poolSize":8,"logLevel":"DEBUG",...}
 ```
 
-`scripts/config-test.sh` 末尾会自动执行一次“切到 test 再切回 dev”的验证，共 16 项断言。
+`scripts/config-test.sh` 末尾会自动执行一次“切到 test 再切回 dev”的验证，共 19 项断言。

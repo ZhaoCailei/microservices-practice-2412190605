@@ -1,4 +1,4 @@
-﻿
+
 
 # 校园失物招领系统
 
@@ -844,13 +844,57 @@ NACOS_CONFIG_NAMESPACE=zcl-test docker compose up -d
 ```bash
 bash scripts/config-setup.sh     # 创建 namespace + 发布 8 份配置
 docker compose up -d --build     # 重建服务
-bash scripts/config-test.sh      # 16 项断言
+bash scripts/config-test.sh      # 19 项断言
 ```
 
-实测（2026-11-23）：`PASS=14 FAIL=0`，覆盖 dev/test 配置存在且值不同、服务读到配置、动态刷新（1s、未重启）、日志级别刷新、环境切换（切 test 9s 生效、切回 dev 9s 恢复）、`.env` 未入库、配置内容无敏感项。
+实测（2026-11-23）：`PASS=19 FAIL=0`，覆盖 dev/test 配置存在且值不同、服务读到配置、动态刷新（1s、未重启、登录 `expiresIn` 变化）、日志级别刷新、环境切换（切 test 10s 生效、切回 dev 9s 恢复）、`.env` 未入库、配置内容无敏感项、`.env.example` 无真实密钥。
 
 ## 7. 文档与截图
 
 配置中心说明见 [`docs/config-center.md`](docs/config-center.md)，配置台账（Data ID / Group / 用途）见 [`docs/configuration.md`](docs/configuration.md)，验收对照与截图清单见 [`docs/homework/week-10/index.md`](docs/homework/week-10/index.md)，截图保存到 [`docs/homework/week-10/screenshots/`](docs/homework/week-10/screenshots/)。
+
+## 8. 安全配置与环境变量
+
+原则：**仓库只提交占位模板 `.env.example`；真实密码和密钥只写在本机 `.env`（已被 `.gitignore` 忽略）；Nacos 里只放非敏感配置。**
+
+| 变量 | 用途 | 来源 |
+|---|---|---|
+| `MYSQL_ROOT_PASSWORD` | MySQL 容器 root 密码 | 本地 `.env` |
+| `USER_DB_PASSWORD` / `LOST_DB_PASSWORD` / `ADMIN_DB_PASSWORD` | 三个业务库账号密码 | 本地 `.env` |
+| `NACOS_PASSWORD` | 服务注册/拉配置用的 Nacos 账号 | 本地 `.env` |
+| `NACOS_AUTH_TOKEN` / `NACOS_AUTH_IDENTITY_KEY` / `NACOS_AUTH_IDENTITY_VALUE` | Nacos 鉴权 | 本地 `.env` |
+| `JWT_SECRET` | JWT 签发/验签（user-service 与 gateway 共用） | 本地 `.env` |
+| `GATEWAY_SHARED_SECRET` | 网关身份头 HMAC 签名 | 本地 `.env` |
+| `NACOS_CONFIG_NAMESPACE` | 选 dev / test 配置环境 | 本地 `.env` |
+
+### 本地如何设置
+
+```bash
+# 1) 复制模板（模板里只有占位值，没有真实密钥）
+cp .env.example .env
+
+# 2) 编辑 .env：改成自己的 MySQL / Nacos 密码
+#    NACOS_PASSWORD、MYSQL_ROOT_PASSWORD、*_DB_PASSWORD
+
+# 3) 生成两个应用密钥，替换 .env 里 JWT_SECRET / GATEWAY_SHARED_SECRET 的占位值
+openssl rand -base64 32
+openssl rand -base64 32
+
+# 4) 确认 .env 不会入库
+git check-ignore .env     # 输出 .env
+git ls-files .env         # 无输出
+
+# 5) 启动并验证
+docker compose up -d
+bash scripts/config-test.sh
+```
+
+> 没有 `openssl` 也可以用 `python -c "import secrets,base64;print(base64.b64encode(secrets.token_bytes(32)).decode())"` 生成。
+
+### 校验与轮换
+
+- `scripts/config-test.sh` 的 19 项断言包含：`.env` 未被 Git 跟踪、`.env.example` 已提交且不含真实密钥值、README 有 `cp .env.example .env` 说明、Nacos 8 份配置无 `password/secret` 字样；
+- 密钥泄露时：改 `.env` 里的 `JWT_SECRET` / `GATEWAY_SHARED_SECRET` → `docker compose up -d` 重建服务 → 旧 token 立即失效；
+- 用 `git log --all -- .env` 自查历史是否出现过 `.env`；如果历史提交过真实凭据，应轮换密码，必要时清洗历史（`git filter-repo` 或 `git filter-branch` 后 force push）。
 
 

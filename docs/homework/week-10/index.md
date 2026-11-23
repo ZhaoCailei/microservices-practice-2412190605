@@ -220,8 +220,11 @@ curl -s http://localhost:8082/api/lost-items/config
 --- 切回 dev 环境 ---
 [PASS] 切回 dev namespace 后 9s 内恢复（jwt=3600, pool=5）
 [PASS] Nacos 配置里没有密码/签名密钥等敏感项
+[PASS] .env.example 已在 Git 中（只含占位值）
+[PASS] .env.example 里没有 .env 的真实密钥值
+[PASS] README 说明了本地环境变量设置方法（cp .env.example .env）
 
-结果：PASS=16  FAIL=0
+结果：PASS=19  FAIL=0
 ```
 
 要点：
@@ -332,7 +335,7 @@ GET http://localhost:8081/api/users/config
 {"jwtExpirationSeconds":1800,"poolSize":8,"logLevel":"DEBUG","source":"nacos:user-service.yaml"}
 ```
 
-整体脚本 16 项断言全部通过（`PASS=16 FAIL=0`），其中 2 项就是环境切换。
+整体脚本 19 项断言全部通过（`PASS=19 FAIL=0`），其中 2 项就是环境切换。
 
 ### 2.4 截图清单（提交 1–3 张）
 
@@ -350,7 +353,7 @@ GET http://localhost:8081/api/users/config
 |---|---|
 | 配置台账 | [`docs/configuration.md`](../../configuration.md)：Data ID、Group、用途、dev/test 值 |
 | 多环境实现 | 4 个服务的 `spring.config.import` + `NACOS_CONFIG_NAMESPACE` 切换 |
-| 验证脚本 | `scripts/config-test.sh`（16 项断言，含切换） |
+| 验证脚本 | `scripts/config-test.sh`（19 项断言，含切换） |
 | 文档 | 本文件 §2（设计、命令、结果） |
 | 截图 | §2.4 |
 
@@ -434,7 +437,7 @@ docker inspect -f '{{.State.StartedAt}}' microservices-practice-2412190605-user-
 | 修改后（1s） | `jwtExpirationSeconds=7200`，`poolSize=6`，`DEBUG` | 7200 |
 | 还原后（1s） | `jwtExpirationSeconds=3600`，`poolSize=5`，`INFO` | 3600 |
 
-整个脚本 16 项断言全部通过（`PASS=16 FAIL=0`），其中 6 项直接对应动态刷新。
+整个脚本 19 项断言全部通过（`PASS=19 FAIL=0`），其中 6 项直接对应动态刷新。
 
 ### 3.5 截图清单（提交 1–3 张）
 
@@ -442,7 +445,7 @@ docker inspect -f '{{.State.StartedAt}}' microservices-practice-2412190605-user-
 |---|---|---|
 | 1 | `dynamic-before-after.png` | 左：Nacos 控制台里 `expiration-seconds` 为 3600；右：改成 7200 后 `curl /api/users/config` 返回 7200（或登录返回 `expiresIn: 7200`） |
 | 2 | `dynamic-log-level.png` | 同一次修改后端点返回 `"logLevel":"DEBUG"`（日志级别也热更新） |
-| 3 | `dynamic-test-output.png` | `bash scripts/config-test.sh` 输出中动态刷新那几行 `[PASS]` 与 `PASS=16 FAIL=0` |
+| 3 | `dynamic-test-output.png` | `bash scripts/config-test.sh` 输出中动态刷新那几行 `[PASS]` 与 `PASS=19 FAIL=0` |
 
 保存到 `docs/homework/week-10/screenshots/`。
 
@@ -456,3 +459,94 @@ docker inspect -f '{{.State.StartedAt}}' microservices-practice-2412190605-user-
 | 验证脚本 | `scripts/config-test.sh`（改配置 → 轮询 → 断言 → 还原） |
 | 文档 | 本文件 §3（实现思路、运行命令、结果） |
 | 截图 | §3.5 |
+
+## 4. 安全配置
+
+### 4.1 设计思路
+
+要求：**不提交真实密码和密钥；提供 `.env.example`；README 说明本地如何设置环境变量。**
+
+三类配置分开存放：
+
+| 类型 | 内容 | 存放位置 | 是否入库 |
+|---|---|---|---|
+| 凭据（密码） | `MYSQL_ROOT_PASSWORD`、`USER_DB_PASSWORD`、`LOST_DB_PASSWORD`、`ADMIN_DB_PASSWORD`、`NACOS_PASSWORD` | 本地 `.env` | 否 |
+| 密钥（Token/签名） | `JWT_SECRET`、`GATEWAY_SHARED_SECRET`、`NACOS_AUTH_TOKEN`、`NACOS_AUTH_IDENTITY_KEY/VALUE` | 本地 `.env` | 否 |
+| 非敏感配置 | JWT 有效期、pool-size、Feign 超时、日志级别 | Nacos Config | 是（脚本可复现） |
+| 模板 | 上述变量的占位值 | `.env.example` | 是 |
+
+设计原则：
+
+1. **真实值只在 `.env`**：`.env` 被 `.gitignore` 忽略，`git check-ignore .env` 能验证；
+2. **仓库只放模板**：`.env.example` 里全是 `your_...` / `replace_with_...` 占位值，照抄也能启动（密码类用默认值，密钥类必须替换）；
+3. **Nacos 不放密钥**：配置中心只存非敏感项，避免“有 Nacos 读权限的人就能拿走密钥”；
+4. **密钥可轮换**：换 `.env` 里的 `JWT_SECRET` / `GATEWAY_SHARED_SECRET` 后重建服务，旧 Token 立即失效；
+5. **可自动检查**：`scripts/config-test.sh` 增加 3 项安全断言，防止以后误提交。
+
+### 4.2 完成情况
+
+| 项 | 实现 |
+|---|---|
+| `.env.example` | 补齐 `JWT_SECRET`、`GATEWAY_SHARED_SECRET`、`NACOS_CONFIG_NAMESPACE`，全部为占位值，并写明 `openssl rand -base64 32` 生成方法 |
+| `.gitignore` | 已忽略 `.env`（`git check-ignore .env` 输出 `.env`） |
+| README | 新增「§8 安全配置与环境变量」：变量表、`cp .env.example .env`、生成密钥、`git check-ignore` 验证 |
+| 脚本断言 | `.env` 未跟踪、`.env.example` 已提交且无真实值、README 有说明、Nacos 配置无敏感项 |
+| 泄露处理 | 文档写明轮换步骤（改密钥 → 重建服务 → 旧 Token 失效） |
+
+### 4.3 运行命令
+
+```bash
+# 本地初始化
+cp .env.example .env
+# 修改数据库/Nacos 密码；用 openssl 生成两个密钥并替换占位值
+openssl rand -base64 32   # 填 JWT_SECRET
+openssl rand -base64 32   # 填 GATEWAY_SHARED_SECRET
+
+# 确认 .env 不入库
+git check-ignore .env
+git ls-files .env        # 应为空
+git log --all -- .env    # 应为空
+
+# 验证
+docker compose up -d
+bash scripts/config-test.sh
+```
+
+### 4.4 结果（2026-11-23）
+
+```text
+[PASS] .env 未被 Git 跟踪（.gitignore 生效）
+[PASS] .env.example 已在 Git 中（只含占位值）
+[PASS] .env.example 里没有 .env 的真实密钥值
+[PASS] README 说明了本地环境变量设置方法（cp .env.example .env）
+[PASS] Nacos 配置里没有密码/签名密钥等敏感项
+结果：PASS=19  FAIL=0
+```
+
+关键结论：
+
+- `.env` 当前未被 Git 跟踪（`git ls-files .env` 无输出）；
+- `.env.example` 里的占位值与真实值逐项比对，未发现泄露（敏感键逐一比对，见脚本）；
+- Nacos 的 8 份配置扫描 `password/secret/JWT_SECRET/GATEWAY_SHARED_SECRET` 均无命中；
+- 整套 19 项断言一次跑通（`PASS=19 FAIL=0`）。
+
+### 4.5 截图清单（提交 1–3 张）
+
+| # | 文件名建议 | 截图内容 |
+|---|---|---|
+| 1 | `security-env-example.png` | `.env.example` 内容：只有占位值，含 `JWT_SECRET=`、`GATEWAY_SHARED_SECRET=` |
+| 2 | `security-ignore-env.png` | 终端：`git check-ignore .env`（输出 `.env`）、`git ls-files .env`（无输出） |
+| 3 | `security-test-output.png` | `bash scripts/config-test.sh` 末尾的安全断言 `[PASS]` 与 `PASS=19 FAIL=0` |
+
+保存到 `docs/homework/week-10/screenshots/`。
+
+### 4.6 提交清单
+
+| 项 | 位置 |
+|---|---|
+| 环境变量模板 | `.env.example`（占位值，无真实凭据） |
+| 忽略规则 | `.gitignore` 中的 `.env` |
+| 说明文档 | `README.md` §8 安全配置与环境变量 |
+| 验证脚本 | `scripts/config-test.sh`（3 项安全断言） |
+| 文档 | 本文件 §4（设计、完成情况、命令、结果） |
+| 截图 | §4.5 |

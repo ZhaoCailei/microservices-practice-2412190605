@@ -101,7 +101,7 @@ NACOS_CONFIG_NAMESPACE=zcl-test docker compose up -d
 ```bash
 bash scripts/config-setup.sh     # 创建 namespace + 发布 8 份配置
 docker compose up -d --build     # 重建服务
-bash scripts/config-test.sh      # 16 项断言：读取/多环境/动态刷新/安全
+bash scripts/config-test.sh      # 19 项断言：读取/多环境/动态刷新/安全
 ```
 
 Nacos 控制台：`http://localhost:18080`，命名空间选 `zcl-dev` 或 `zcl-test` 查看配置。

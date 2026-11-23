@@ -245,6 +245,37 @@ else
   fail "配置里疑似有敏感项：$SECRET_HIT"
 fi
 
+# 11) 安全配置：.env.example 已提交，且不含 .env 的真实密钥值
+if [ -f .env.example ] && git ls-files --error-unmatch .env.example >/dev/null 2>&1; then
+  pass ".env.example 已在 Git 中（只含占位值）"
+else
+  fail ".env.example 缺失或未提交"
+fi
+
+LEAKED=""
+while IFS='=' read -r key value; do
+  key=$(echo "$key" | tr -d '\r')
+  value=$(echo "$value" | tr -d '\r')
+  case "$key" in ''|'#'*) continue;; esac
+  [ -z "$value" ] && continue
+  case "$key" in
+    JWT_SECRET|GATEWAY_SHARED_SECRET|NACOS_PASSWORD|MYSQL_ROOT_PASSWORD|USER_DB_PASSWORD|LOST_DB_PASSWORD|ADMIN_DB_PASSWORD|NACOS_AUTH_TOKEN|NACOS_AUTH_IDENTITY_KEY|NACOS_AUTH_IDENTITY_VALUE)
+      if grep -qF "$value" .env.example; then LEAKED="$LEAKED $key"; fi
+      ;;
+  esac
+done < .env
+if [ -z "$LEAKED" ]; then
+  pass ".env.example 里没有 .env 的真实密钥值"
+else
+  fail ".env.example 泄露了真实密钥：$LEAKED"
+fi
+
+if grep -q 'cp .env.example .env' README.md && grep -q 'JWT_SECRET' README.md; then
+  pass "README 说明了本地环境变量设置方法（cp .env.example .env）"
+else
+  fail "README 缺少环境变量设置说明"
+fi
+
 echo ""
 echo "结果：PASS=$PASS  FAIL=$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
