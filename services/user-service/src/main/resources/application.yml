@@ -4,6 +4,9 @@ server:
 spring:
   application:
     name: user-service
+  # 配置中心：Data ID = user-service.yaml，Group = ZCL_GROUP，namespace 由 NACOS_CONFIG_NAMESPACE 选择（dev/test）
+  config:
+    import: "optional:nacos:user-service.yaml?group=${NACOS_GROUP:ZCL_GROUP}&refreshEnabled=true"
   cloud:
     nacos:
       discovery:
@@ -12,6 +15,12 @@ spring:
         password: "${NACOS_PASSWORD:}"
         group: ${NACOS_GROUP:ZCL_GROUP}
         register-enabled: true
+      config:
+        server-addr: ${NACOS_SERVER_ADDR:nacos:8848}
+        username: ${NACOS_USERNAME:nacos}
+        password: "${NACOS_PASSWORD:}"
+        # 开发/测试通过 namespace 隔离：compose 里默认 zcl-dev，可切成 zcl-test
+        namespace: ${NACOS_CONFIG_NAMESPACE:}
   datasource:
     # 本机跑用 localhost；docker compose 里通过 DB_HOST=user-db 覆盖
     url: jdbc:mysql://${DB_HOST:localhost}:3306/user_db?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&createDatabaseIfNotExist=true
@@ -34,8 +43,7 @@ app:
   jwt:
     # Base64 编码的随机密钥，解码后至少 32 字节；本地由 .env 的 JWT_SECRET 提供
     secret: ${JWT_SECRET:}
-    # Token 有效期（秒），默认 1 小时
-    expiration-seconds: ${JWT_EXPIRATION_SECONDS:3600}
+    # 有效期（秒）已迁到 Nacos 配置中心（user-service.yaml），代码里保留 3600 兜底默认值
   gateway:
     # 网关与下游服务共享的签名密钥：/api/users/current 用它校验请求确实来自网关
     shared-secret: ${GATEWAY_SHARED_SECRET:}

@@ -765,6 +765,92 @@ echo "GATEWAY_SHARED_SECRET=$(openssl rand -base64 32)" >> .env
 
 ## 7. 文档与截图
 
-实现细节、验收点对照、截图清单见 [`docs/homework/week-09/index.md`](docs/homework/week-09/index.md)，截图保存到 [`docs/homework/week-09/screenshots/`](docs/homework/week-09/screenshots/)。
+实现细节、验收点对照、截图清单见 [`docs/homework/week-09/index.md`](docs/homework/week-09/index.md)，截图保存到 [`docs/homework/week-09/screenshots/`](docs/homework/week-09/screenshots/)；网关鉴权与认证流程的安全设计见 [`docs/security.md`](docs/security.md)。
+
+---
+
+# 第十周：配置中心（Nacos Config）
+
+把 4 个服务的非敏感配置迁到 Nacos，用 namespace 区分 dev / test，并验证“改配置不重启即生效”。
+
+## 1. Nacos 中的结构
+
+```text
+Nacos 3.2.4
+├── namespace zcl-dev（开发）
+│   ├── user-service.yaml
+│   ├── lost-service.yaml
+│   ├── admin-service.yaml
+│   └── gateway-service.yaml
+└── namespace zcl-test（测试）
+    └── 同名 4 份，值与 dev 不同
+```
+
+Group 统一 `ZCL_GROUP`；环境用 namespace 隔离（与注册中心共用 Nacos 实例）。
+
+## 2. 迁移了哪些配置
+
+| Data ID | 服务 | 配置项 | dev | test |
+| --- | --- | --- | --- | --- |
+| `user-service.yaml` | user-service | JWT 有效期 / pool-size / 日志级别 | 3600 / 5 / INFO | 1800 / 8 / DEBUG |
+| `lost-service.yaml` | lost-service | Feign 超时 / pool-size / 日志级别 | 3000/3000 / 3 / INFO | 2000/2000 / 6 / DEBUG |
+| `admin-service.yaml` | admin-service | audit-page-size / 日志级别 | 20 / INFO | 10 / DEBUG |
+| `gateway-service.yaml` | gateway-service | 日志级别 | INFO | DEBUG |
+
+只迁非敏感项；数据库密码、`JWT_SECRET`、`GATEWAY_SHARED_SECRET` 仍在 `.env`，不入库。
+
+## 3. 接入方式
+
+```xml
+<dependency>
+  <groupId>com.alibaba.cloud</groupId>
+  <artifactId>spring-cloud-starter-alibaba-nacos-config</artifactId>
+</dependency>
+```
+
+```yaml
+spring:
+  config:
+    import: "optional:nacos:user-service.yaml?group=${NACOS_GROUP:ZCL_GROUP}&refreshEnabled=true"
+  cloud:
+    nacos:
+      config:
+        server-addr: ${NACOS_SERVER_ADDR:nacos:8848}
+        username: ${NACOS_USERNAME:nacos}
+        password: "${NACOS_PASSWORD:}"
+        namespace: ${NACOS_CONFIG_NAMESPACE:}   # compose 默认 zcl-dev
+```
+
+`optional:` 保证配置中心暂不可用时服务仍能启动（代码里保留默认值）。
+
+## 4. 多环境切换
+
+```bash
+# 开发环境（默认）
+docker compose up -d
+
+# 测试环境：只换 namespace
+NACOS_CONFIG_NAMESPACE=zcl-test docker compose up -d
+```
+
+## 5. 动态刷新
+
+- `ConfigDemoController`（user-service / lost-service）加 `@RefreshScope`；
+- 验证端点：`GET http://localhost:8081/api/users/config`、`GET http://localhost:8082/api/lost-items/config`；
+- 实测：改 Nacos 后 1 秒内生效，容器 `StartedAt` 不变（不是重启）。
+
+## 6. 运行与验证
+
+```bash
+bash scripts/config-setup.sh     # 创建 namespace + 发布 8 份配置
+docker compose up -d --build     # 重建服务
+bash scripts/config-test.sh      # 12 项断言
+```
+
+实测（2026-11-23）：`PASS=12 FAIL=0`，覆盖 dev/test 配置存在且值不同、服务读到配置、动态刷新（1s、未重启）、日志级别刷新、`.env` 未入库、配置内容无敏感项。
+
+## 7. 文档与截图
+
+配置中心说明见 [`docs/config-center.md`](docs/config-center.md)，验收对照与截图清单见 [`docs/homework/week-10/index.md`](docs/homework/week-10/index.md)，截图保存到 [`docs/homework/week-10/screenshots/`](docs/homework/week-10/screenshots/)。
 
 

@@ -4,6 +4,9 @@ server:
 spring:
   application:
     name: admin-service
+  # 配置中心：Data ID = admin-service.yaml（日志级别、业务参数等非敏感项）
+  config:
+    import: "optional:nacos:admin-service.yaml?group=${NACOS_GROUP:ZCL_GROUP}&refreshEnabled=true"
   cloud:
     nacos:
       discovery:
@@ -12,6 +15,11 @@ spring:
         password: "${NACOS_PASSWORD:}"
         group: ${NACOS_GROUP:ZCL_GROUP}
         register-enabled: true
+      config:
+        server-addr: ${NACOS_SERVER_ADDR:nacos:8848}
+        username: ${NACOS_USERNAME:nacos}
+        password: "${NACOS_PASSWORD:}"
+        namespace: ${NACOS_CONFIG_NAMESPACE:}
   datasource:
     # 本机跑用 localhost；docker compose 里通过 DB_HOST=admin-db 覆盖
     url: jdbc:mysql://${DB_HOST:localhost}:3306/admin_db?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai&createDatabaseIfNotExist=true

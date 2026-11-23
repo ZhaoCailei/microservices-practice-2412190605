@@ -5,6 +5,9 @@ server:
 spring:
   application:
     name: gateway-service
+  # 配置中心：Data ID = gateway-service.yaml（日志级别等非敏感项集中管理）
+  config:
+    import: "optional:nacos:gateway-service.yaml?group=${NACOS_GROUP:ZCL_GROUP}&refreshEnabled=true"
   cloud:
     nacos:
       discovery:
@@ -13,6 +16,11 @@ spring:
         password: "${NACOS_PASSWORD:}"
         group: ${NACOS_GROUP:ZCL_GROUP}
         register-enabled: true
+      config:
+        server-addr: ${NACOS_SERVER_ADDR:nacos:8848}
+        username: ${NACOS_USERNAME:nacos}
+        password: "${NACOS_PASSWORD:}"
+        namespace: ${NACOS_CONFIG_NAMESPACE:}
     # Spring Cloud Gateway 5.x 的配置前缀
     gateway:
       server:

@@ -43,13 +43,14 @@ public class AuthGlobalFilter implements GlobalFilter, Ordered {
     private static final String HEADER_USER_ROLE = "X-User-Role";
     private static final String HEADER_SIGNATURE = "X-Gateway-Signature";
     private static final String ADMIN_PATH_PREFIX = "/api/admin/";
-
+//白名单：自定义健康检查，健康检查（服务是否还活着），登录
     private static final Set<String> PUBLIC_PATHS = Set.of(
             "/api/health",
             "/actuator/health",
             "/api/auth/login");
-
+    //身份解析器
     private final JwtDecoder jwtDecoder;
+    //防伪私匙
     private final String sharedSecret;
 
     public AuthGlobalFilter(JwtDecoder jwtDecoder,
@@ -70,7 +71,7 @@ public class AuthGlobalFilter implements GlobalFilter, Ordered {
             return chain.filter(exchange);
         }
 
-        // 2) 必须有 Bearer Token
+        // 2) 必须有 Bearer Token，否则401
         String authorization = exchange.getRequest().getHeaders().getFirst(HttpHeaders.AUTHORIZATION);
         if (authorization == null || !authorization.startsWith(BEARER_PREFIX)) {
             return reject(exchange, HttpStatus.UNAUTHORIZED, "未登录：缺少 Authorization: Bearer <token>");
@@ -88,7 +89,7 @@ public class AuthGlobalFilter implements GlobalFilter, Ordered {
         String username = jwt.getClaimAsString("username");
         String role = jwt.getClaimAsString("role");
 
-        // 4) 角色校验：/api/admin/** 只有 ADMIN 能过
+        // 4) 角色校验：/api/admin/** 只有 ADMIN 能过，如果 JWT 里的角色不是 ADMIN，直接返回 HTTP 403（禁止访问）。
         if (path.startsWith(ADMIN_PATH_PREFIX) && !"ADMIN".equals(role)) {
             return reject(exchange, HttpStatus.FORBIDDEN, "角色不足：该接口需要 ADMIN");
         }
@@ -97,14 +98,17 @@ public class AuthGlobalFilter implements GlobalFilter, Ordered {
         String signature = sign(userId, role);
         ServerHttpRequest mutatedRequest = exchange.getRequest().mutate()
                 .headers(headers -> {
+                    //删除客户端带来的所有身份头
                     headers.remove(HEADER_USER_ID);
                     headers.remove(HEADER_USER_NAME);
                     headers.remove(HEADER_USER_ROLE);
                     headers.remove(HEADER_SIGNATURE);
+                    // 重新塞入网关验证过的身份信息
 
                     headers.set(HEADER_USER_ID, userId);
                     headers.set(HEADER_USER_NAME, username);
                     headers.set(HEADER_USER_ROLE, role);
+                    //塞入防伪签名
                     headers.set(HEADER_SIGNATURE, signature);
                 })
                 .build();
